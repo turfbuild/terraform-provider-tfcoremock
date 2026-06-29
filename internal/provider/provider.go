@@ -90,6 +90,7 @@ type tfcoremockProvider struct {
 	failOnUpdate []string
 	failOnRead   []string
 	failOnDelete []string
+	failOnInvoke []string
 	deferChanges []string
 }
 
@@ -102,6 +103,7 @@ type providerData struct {
 	FailOnUpdate types.List `tfsdk:"fail_on_update"`
 	FailOnRead   types.List `tfsdk:"fail_on_read"`
 	FailOnDelete types.List `tfsdk:"fail_on_delete"`
+	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
 }
@@ -144,18 +146,21 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	failOnCreate, failOnCreateDiags := parseStringList(ctx, data.FailOnCreate, "fail_on_create")
 	failOnRead, failOnReadDiags := parseStringList(ctx, data.FailOnRead, "fail_on_read")
 	failOnUpdate, failOnUpdateDiags := parseStringList(ctx, data.FailOnUpdate, "fail_on_update")
+	failOnInvoke, failOnInvokeDiags := parseStringList(ctx, data.FailOnInvoke, "fail_on_invoke")
 	deferChanges, deferChangesDiags := parseStringList(ctx, data.DeferChanges, "defer_changes")
 
 	response.Diagnostics.Append(failOnDeleteDiags...)
 	response.Diagnostics.Append(failOnCreateDiags...)
 	response.Diagnostics.Append(failOnReadDiags...)
 	response.Diagnostics.Append(failOnUpdateDiags...)
+	response.Diagnostics.Append(failOnInvokeDiags...)
 	response.Diagnostics.Append(deferChangesDiags...)
 
 	m.failOnDelete = failOnDelete
 	m.failOnCreate = failOnCreate
 	m.failOnRead = failOnRead
 	m.failOnUpdate = failOnUpdate
+	m.failOnInvoke = failOnInvoke
 	m.deferChanges = deferChanges
 }
 
@@ -318,12 +323,14 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 			return resource.Action{
 				Name:           "tfcoremock_complex_resource",
 				InternalSchema: complex.Schema(3),
+				FailOnInvoke:   m.failOnInvoke,
 			}
 		},
 		func() action.Action {
 			return resource.Action{
 				Name:           "tfcoremock_simple_resource",
 				InternalSchema: simple.Schema,
+				FailOnInvoke:   m.failOnInvoke,
 			}
 		},
 	}
@@ -352,6 +359,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 			return resource.Action{
 				Name:           actionName,
 				InternalSchema: actionSchema,
+				FailOnInvoke:   m.failOnInvoke,
 			}
 		})
 	}
@@ -452,6 +460,12 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any resources with an ID in this list will fail during the delete phase.",
 				MarkdownDescription: "If set, any resources with an ID in this list will fail during the delete phase.",
+			},
+			"fail_on_invoke": provider_schema.ListAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Description:         "If set, any action whose config `string` attribute is in this list will fail when invoked.",
+				MarkdownDescription: "If set, any action whose config `string` attribute is in this list will fail when invoked.",
 			},
 			"defer_changes": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
