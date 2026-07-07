@@ -106,6 +106,22 @@ type providerData struct {
 	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
+
+	// Cluster is a block-typed config attribute (NestingList, encoded as a list
+	// of objects) that exercises a downstream consumer's schema-aware
+	// object->list-of-one coercion for a nested provider-config block — the
+	// shape real providers such as helm ('kubernetes {}') use. It has no effect
+	// on resource behavior; when a known 'host' is supplied with 'fail = true'
+	// the provider fails Configure with a diagnostic echoing the host, so a
+	// caller can prove the block content reached the provider. ('connection' is
+	// a reserved root block name in Terraform, hence 'cluster'.)
+	Cluster types.List `tfsdk:"cluster"`
+}
+
+// clusterModel is the object shape of a single 'cluster' block element.
+type clusterModel struct {
+	Host types.String `tfsdk:"host"`
+	Fail types.Bool   `tfsdk:"fail"`
 }
 
 func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.ConfigureRequest, response *provider.ConfigureResponse) {
@@ -162,6 +178,31 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnUpdate = failOnUpdate
 	m.failOnInvoke = failOnInvoke
 	m.deferChanges = deferChanges
+
+	// The 'cluster' nested block is inert except as an observation channel:
+	// when a known host is supplied with fail = true, fail Configure with a
+	// diagnostic echoing the host — proving the block content reached the
+	// provider (rather than being silently dropped). An unknown host is
+	// tolerated (not an error), so a deferral-driving unknown config still
+	// configures cleanly.
+	if !data.Cluster.IsNull() && !data.Cluster.IsUnknown() {
+		var clusters []clusterModel
+		response.Diagnostics.Append(data.Cluster.ElementsAs(ctx, &clusters, false)...)
+		if response.Diagnostics.HasError() {
+			return
+		}
+		for _, cluster := range clusters {
+			if cluster.Host.IsUnknown() {
+				continue
+			}
+			if cluster.Fail.ValueBool() {
+				response.Diagnostics.AddError(
+					"cluster block received",
+					fmt.Sprintf("cluster.host = %q", cluster.Host.ValueString()),
+				)
+			}
+		}
+	}
 }
 
 func parseStringList(ctx context.Context, value types.List, attr string) ([]string, diag.Diagnostics) {
@@ -472,6 +513,33 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
 				MarkdownDescription: "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
+			},
+		},
+		Blocks: map[string]provider_schema.Block{
+			// A nested config block (NestingList, encoded as a list of objects),
+			// modeling the shape real providers such as helm ('kubernetes {}')
+			// use for cluster-connection settings. Present so downstream
+			// consumers can exercise object->list-of-one coercion for a
+			// block-typed provider config attribute. Has no effect on resource
+			// behavior. ('connection' is a reserved root block name, hence
+			// 'cluster'.)
+			"cluster": provider_schema.ListNestedBlock{
+				Description:         "Optional cluster settings, modeling a provider whose config uses a nested block. When `host` is known and `fail = true`, the provider fails Configure with a diagnostic echoing the host.",
+				MarkdownDescription: "Optional cluster settings, modeling a provider whose config uses a nested block. When `host` is known and `fail = true`, the provider fails Configure with a diagnostic echoing the host.",
+				NestedObject: provider_schema.NestedBlockObject{
+					Attributes: map[string]provider_schema.Attribute{
+						"host": provider_schema.StringAttribute{
+							Optional:            true,
+							Description:         "Connection host. Echoed back in a diagnostic when `fail = true`.",
+							MarkdownDescription: "Connection host. Echoed back in a diagnostic when `fail = true`.",
+						},
+						"fail": provider_schema.BoolAttribute{
+							Optional:            true,
+							Description:         "When true and `host` is known, the provider fails Configure with a diagnostic echoing the host.",
+							MarkdownDescription: "When true and `host` is known, the provider fails Configure with a diagnostic echoing the host.",
+						},
+					},
+				},
 			},
 		},
 	}
