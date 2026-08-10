@@ -89,12 +89,24 @@ func TestResource_UpgradeIdentity_registration(t *testing.T) {
 	}
 }
 
+// upgradeResponse mirrors what the framework hands an identity upgrader: the
+// identity carries a schema but *no value* ("Raw is intentionally not set"), so
+// an upgrader that writes attribute by attribute has nothing to write into and
+// fails at runtime. Constructing it any other way makes the test more permissive
+// than the server.
+func upgradeResponse(t *testing.T, version int64) resource.UpgradeIdentityResponse {
+	t.Helper()
+	return resource.UpgradeIdentityResponse{
+		Identity: &tfsdk.ResourceIdentity{Schema: identitySchema(t, version).IdentitySchema},
+	}
+}
+
 // The upgrade must reconstruct the whole identity: the framework copies no
 // prior data across, so anything the upgrader omits is lost.
 func TestResource_UpgradeIdentity_derivesUrnFromId(t *testing.T) {
 	upgrader := Resource{IdentitySchemaVersion: 1}.UpgradeIdentity(context.Background())[0]
 
-	response := resource.UpgradeIdentityResponse{Identity: identityValue(t, 1, nil)}
+	response := upgradeResponse(t, 1)
 	upgrader.IdentityUpgrader(context.Background(), resource.UpgradeIdentityRequest{
 		RawIdentity: &tfprotov6.RawState{JSON: []byte(`{"id":"my-id"}`)},
 	}, &response)
@@ -112,14 +124,35 @@ func TestResource_UpgradeIdentity_derivesUrnFromId(t *testing.T) {
 	}
 }
 
-func TestResource_UpgradeIdentity_missingPriorIdentity(t *testing.T) {
-	upgrader := Resource{IdentitySchemaVersion: 1}.UpgradeIdentity(context.Background())[0]
+func TestResource_UpgradeIdentity_rejectsUnusablePriorIdentity(t *testing.T) {
+	testCases := []struct {
+		TestCase string
+		Request  resource.UpgradeIdentityRequest
+	}{
+		{
+			TestCase: "no prior identity at all",
+			Request:  resource.UpgradeIdentityRequest{},
+		},
+		{
+			// The whole identity derives from the id, so without one there is
+			// nothing to upgrade to — better to say so than to record an
+			// identity built from an empty string.
+			TestCase: "a prior identity with a null id",
+			Request:  resource.UpgradeIdentityRequest{RawIdentity: &tfprotov6.RawState{JSON: []byte(`{"id":null}`)}},
+		},
+	}
 
-	response := resource.UpgradeIdentityResponse{Identity: identityValue(t, 1, nil)}
-	upgrader.IdentityUpgrader(context.Background(), resource.UpgradeIdentityRequest{}, &response)
+	for _, testCase := range testCases {
+		t.Run(testCase.TestCase, func(t *testing.T) {
+			upgrader := Resource{IdentitySchemaVersion: 1}.UpgradeIdentity(context.Background())[0]
 
-	if !response.Diagnostics.HasError() {
-		t.Error("expected a diagnostic when no prior identity was supplied")
+			response := upgradeResponse(t, 1)
+			upgrader.IdentityUpgrader(context.Background(), testCase.Request, &response)
+
+			if !response.Diagnostics.HasError() {
+				t.Errorf("expected a diagnostic but got identity %s", response.Identity.Raw)
+			}
+		})
 	}
 }
 

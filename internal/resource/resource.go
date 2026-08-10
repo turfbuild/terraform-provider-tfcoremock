@@ -108,9 +108,6 @@ func (r Resource) UpgradeIdentity(ctx context.Context) map[int64]resource.Identi
 		// Version 0 recorded only the id; the urn is derived from it.
 		0: {
 			IdentityUpgrader: func(ctx context.Context, request resource.UpgradeIdentityRequest, response *resource.UpgradeIdentityResponse) {
-				var prior struct {
-					Id string `tfsdk:"id"`
-				}
 				if request.RawIdentity == nil {
 					response.Diagnostics.AddError("failed to upgrade identity", "no prior identity was supplied")
 					return
@@ -128,13 +125,25 @@ func (r Resource) UpgradeIdentity(ctx context.Context) map[int64]resource.Identi
 					response.Diagnostics.AddError("failed to upgrade identity", err.Error())
 					return
 				}
-				if err := raw["id"].As(&prior.Id); err != nil {
+
+				var id *string
+				if err := raw["id"].As(&id); err != nil {
 					response.Diagnostics.AddError("failed to upgrade identity", err.Error())
 					return
 				}
+				if id == nil {
+					response.Diagnostics.AddError("failed to upgrade identity", "the prior identity recorded no id")
+					return
+				}
 
-				response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("id"), prior.Id)...)
-				response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("urn"), data.Urn(prior.Id))...)
+				// Set the whole identity rather than attribute by attribute:
+				// the framework hands the upgrader a response identity with a
+				// schema but no value, so there is nothing for an attribute
+				// write to be written into. Building it through
+				// data.Resource.Identity also keeps one source of truth for the
+				// shape at each version.
+				upgraded := data.Resource{Values: map[string]data.Value{"id": {String: id}}}
+				response.Diagnostics.Append(response.Identity.Set(ctx, upgraded.Identity(r.IdentitySchemaVersion))...)
 			},
 		},
 	}
