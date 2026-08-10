@@ -92,6 +92,8 @@ type tfcoremockProvider struct {
 	failOnDelete []string
 	failOnInvoke []string
 	deferChanges []string
+
+	strictIdentity bool
 }
 
 type providerData struct {
@@ -106,6 +108,14 @@ type providerData struct {
 	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
+
+	// StrictIdentity turns the identity a client sends on the wire into an
+	// observable: when true, resources fail the call if the prior identity does
+	// not match what the protocol requires. Without it a client's identity
+	// bookkeeping is invisible from the outside, because this provider derives
+	// every identity it reports from its own state rather than echoing the one
+	// it was given.
+	StrictIdentity types.Bool `tfsdk:"strict_identity"`
 
 	// Cluster is a block-typed config attribute (NestingList, encoded as a list
 	// of objects) that exercises a downstream consumer's schema-aware
@@ -178,6 +188,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnUpdate = failOnUpdate
 	m.failOnInvoke = failOnInvoke
 	m.deferChanges = deferChanges
+	m.strictIdentity = data.StrictIdentity.ValueBool()
 
 	// The 'cluster' nested block is inert except as an observation channel:
 	// when a known host is supplied with fail = true, fail Configure with a
@@ -255,6 +266,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
+				StrictIdentity: m.strictIdentity,
 			}
 		},
 		func() tfresource.Resource {
@@ -267,6 +279,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
+				StrictIdentity: m.strictIdentity,
 			}
 		},
 	}
@@ -301,6 +314,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
+				StrictIdentity: m.strictIdentity,
 			}
 		})
 	}
@@ -513,6 +527,11 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
 				MarkdownDescription: "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
+			},
+			"strict_identity": provider_schema.BoolAttribute{
+				Optional:            true,
+				Description:         "If set to true, resources assert that the prior identity Terraform sends matches the protocol's rules: null when planning a create, and equal to the recorded id when reading. Defaults to `false`.",
+				MarkdownDescription: "If set to true, resources assert that the prior identity Terraform sends matches the protocol's rules: null when planning a create, and equal to the recorded id when reading. Defaults to `false`.",
 			},
 		},
 		Blocks: map[string]provider_schema.Block{

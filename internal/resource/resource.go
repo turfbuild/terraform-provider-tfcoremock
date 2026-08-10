@@ -15,6 +15,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/computed"
@@ -39,6 +41,13 @@ type Resource struct {
 	FailOnRead   []string
 	FailOnUpdate []string
 	DeferChanges []string
+
+	// StrictIdentity makes the prior identity a client sends observable by
+	// asserting it. This provider derives every identity it reports from its own
+	// state, so an incoming identity otherwise leaves no trace: a client that
+	// carried the wrong one — or none at all — would still see the right answer
+	// come back. See assertPriorIdentity.
+	StrictIdentity bool
 }
 
 func (r Resource) Metadata(ctx context.Context, request resource.MetadataRequest, response *resource.MetadataResponse) {
@@ -106,6 +115,13 @@ func (r Resource) Create(ctx context.Context, request resource.CreateRequest, re
 func (r Resource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
 	resource := &data.Resource{}
 	response.Diagnostics.Append(request.State.Get(ctx, &resource)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// A read refreshes an object that already exists, so it must carry that
+	// object's identity.
+	r.assertPriorIdentity(ctx, "read this resource", request.Identity, resource.GetId(), &response.Diagnostics)
 	if response.Diagnostics.HasError() {
 		return
 	}
@@ -200,7 +216,81 @@ func (r Resource) ImportState(ctx context.Context, request resource.ImportStateR
 	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), request, response)
 }
 
+// assertPriorIdentity checks the identity a client sent alongside prior state
+// against what the protocol requires, when strict_identity is on. op names the
+// call for the diagnostic. A wantID of "" means the call must carry no identity
+// at all, which is the rule for planning a create: the object does not exist
+// yet, so there is nothing to identify — and on the create half of a replace,
+// an identity leaking across from the object being destroyed would assert the
+// new remote object is the old one.
+func (r Resource) assertPriorIdentity(ctx context.Context, op string, identity *tfsdk.ResourceIdentity, wantID string, diags *diag.Diagnostics) {
+	if !r.StrictIdentity {
+		return
+	}
+
+	absent := identity == nil || identity.Raw.IsNull()
+
+	if wantID == "" {
+		if !absent {
+			diags.AddError(
+				"unexpected prior identity",
+				fmt.Sprintf("strict_identity is set and this call to %s carried a prior identity, but the resource does not exist yet so there is nothing to identify.", op))
+		}
+		return
+	}
+
+	if absent {
+		diags.AddError(
+			"missing prior identity",
+			fmt.Sprintf("strict_identity is set and this call to %s carried no prior identity, but the resource is recorded with id %q.", op, wantID))
+		return
+	}
+
+	var got types.String
+	diags.Append(identity.GetAttribute(ctx, path.Root("id"), &got)...)
+	if diags.HasError() {
+		return
+	}
+
+	if got.ValueString() != wantID {
+		diags.AddError(
+			"prior identity does not match",
+			fmt.Sprintf("strict_identity is set and this call to %s carried the identity of %q, but the resource is recorded with id %q.", op, got.ValueString(), wantID))
+	}
+}
+
+// priorID returns the id recorded in prior state, and whether one was recorded.
+func priorID(ctx context.Context, state tfsdk.State, diags *diag.Diagnostics) (string, bool) {
+	if state.Raw.IsNull() {
+		return "", false
+	}
+
+	prior := &data.Resource{}
+	diags.Append(state.Get(ctx, &prior)...)
+	if diags.HasError() {
+		return "", false
+	}
+
+	if _, ok := prior.Values["id"]; !ok {
+		return "", false
+	}
+
+	return prior.GetId(), true
+}
+
 func (r Resource) ModifyPlan(ctx context.Context, request resource.ModifyPlanRequest, response *resource.ModifyPlanResponse) {
+	// A null plan is a destroy, which carries the prior identity and has no
+	// rule of its own to check.
+	if r.StrictIdentity && !request.Plan.Raw.IsNull() {
+		// A null prior state means this plans a create — including the create
+		// half of a replace, which is the case worth pinning.
+		wantID, _ := priorID(ctx, request.State, &response.Diagnostics)
+		r.assertPriorIdentity(ctx, "plan a change to this resource", request.Identity, wantID, &response.Diagnostics)
+		if response.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	res := &data.Resource{}
 	response.Diagnostics.Append(request.Plan.Get(ctx, &res)...)
 	if response.Diagnostics.HasError() {
