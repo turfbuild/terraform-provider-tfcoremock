@@ -282,6 +282,24 @@ func (r Resource) ImportState(ctx context.Context, request resource.ImportStateR
 	// diagnostic. The read that follows then dereferences an absent id and
 	// panics, taking the plugin process down.
 	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), request, response)
+	if response.Diagnostics.HasError() || response.Identity == nil {
+		return
+	}
+
+	// Report the adopted object's identity. The framework pre-populates the
+	// response identity from the request, so importing by identity already
+	// carries one — but importing by id leaves it null, and the caller would
+	// then have nothing to record until the read that follows. The id is in
+	// state either way, and the identity derives from it.
+	var id types.String
+	response.Diagnostics.Append(response.State.GetAttribute(ctx, path.Root("id"), &id)...)
+	if response.Diagnostics.HasError() || id.IsNull() {
+		return
+	}
+
+	value := id.ValueString()
+	imported := data.Resource{Values: map[string]data.Value{"id": {String: &value}}}
+	response.Diagnostics.Append(response.Identity.Set(ctx, imported.Identity(r.IdentitySchemaVersion))...)
 }
 
 // assertPriorIdentity checks the identity a client sent alongside prior state
