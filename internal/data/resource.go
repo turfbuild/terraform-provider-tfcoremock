@@ -44,18 +44,37 @@ func (r Resource) GetId() string {
 	return *r.Values["id"].String
 }
 
-// Identity returns the identity type for this resource.
-func (r Resource) Identity() tftypes.Value {
+// UrnPrefix is prepended to a resource's id to form the `urn` attribute that
+// identity schema version 1 adds. The urn is derived from the id alone so that
+// an identity can be upgraded from version 0, which records nothing else.
+const UrnPrefix = "tfcoremock://"
 
-	t := tftypes.Object{
-		AttributeTypes: map[string]tftypes.Type{
-			"id": tftypes.String,
-		},
+// Urn returns the identity `urn` for a given resource id.
+func Urn(id string) string {
+	return UrnPrefix + id
+}
+
+// Identity returns the identity value for this resource at the given identity
+// schema version.
+//
+// The value is hand-rolled rather than built from a struct, so its object type
+// must match the schema exactly or the framework rejects it — keep this in step
+// with Resource.IdentitySchema in the resource package.
+func (r Resource) Identity(version int64) tftypes.Value {
+
+	attributeTypes := map[string]tftypes.Type{
+		"id": tftypes.String,
+	}
+	attributes := map[string]tftypes.Value{
+		"id": tftypes.NewValue(tftypes.String, r.GetId()),
 	}
 
-	return tftypes.NewValue(t, map[string]tftypes.Value{
-		"id": tftypes.NewValue(tftypes.String, r.GetId()),
-	})
+	if version >= 1 {
+		attributeTypes["urn"] = tftypes.String
+		attributes["urn"] = tftypes.NewValue(tftypes.String, Urn(r.GetId()))
+	}
+
+	return tftypes.NewValue(tftypes.Object{AttributeTypes: attributeTypes}, attributes)
 }
 
 // WithType adds type information into a Resource as this is not stored as part

@@ -20,6 +20,10 @@ type ListResource struct {
 	Name           string
 	InternalSchema schema.Schema
 	Client         client.Client
+
+	// IdentitySchemaVersion must match the managed resource's, since a list
+	// result's identity is validated against that resource's identity schema.
+	IdentitySchemaVersion int64
 }
 
 func (l ListResource) Metadata(ctx context.Context, request resource.MetadataRequest, response *resource.MetadataResponse) {
@@ -60,7 +64,7 @@ func (l ListResource) List(ctx context.Context, request list.ListRequest, stream
 				return
 			} else {
 				result.DisplayName = resource.GetId()
-				result.Diagnostics.Append(result.Identity.Set(ctx, resource.Identity())...)
+				result.Diagnostics.Append(result.Identity.Set(ctx, resource.Identity(l.IdentitySchemaVersion))...)
 
 				if request.IncludeResource {
 					typ := request.ResourceSchema.Type().TerraformType(ctx)
