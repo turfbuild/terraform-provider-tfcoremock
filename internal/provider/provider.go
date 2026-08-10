@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/action"
@@ -70,6 +71,13 @@ Additionally, all resources are available to be queried via ''list'' blocks. For
 The provider also supports actions (introduced in Terraform v1.14). All resources (both static and dynamic) are made available as action blocks, that can be plugged into any Terraform configuration. Unlike resources and data sources, actions have no ''id'' associated with them as they are not written to disk.`
 
 	dynamicResourcesPathEnvVarName = "TFCOREMOCK_DYNAMIC_RESOURCES_FILE"
+
+	// identitySchemaVersionEnvVarName selects the identity schema version the
+	// provider declares. It is an environment variable rather than a config
+	// attribute because GetResourceIdentitySchemas is an unconfigured RPC:
+	// clients fetch schemas before ConfigureProvider, so a config attribute
+	// would not be set in time.
+	identitySchemaVersionEnvVarName = "TFCOREMOCK_IDENTITY_SCHEMA_VERSION"
 )
 
 type tfcoremockProvider struct {
@@ -94,6 +102,10 @@ type tfcoremockProvider struct {
 	deferChanges []string
 
 	strictIdentity bool
+
+	// identitySchemaVersion is read from the environment at construction; see
+	// identitySchemaVersionEnvVarName.
+	identitySchemaVersion int64
 }
 
 type providerData struct {
@@ -267,6 +279,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
+
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		},
 		func() tfresource.Resource {
@@ -280,6 +294,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
+
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		},
 	}
@@ -315,6 +331,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
+
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		})
 	}
@@ -426,16 +444,18 @@ func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.Li
 	listResources := []func() list.ListResource{
 		func() list.ListResource {
 			return resource.ListResource{
-				Name:           "tfcoremock_complex_resource",
-				InternalSchema: complex.Schema(3),
-				Client:         m.client,
+				Name:                  "tfcoremock_complex_resource",
+				InternalSchema:        complex.Schema(3),
+				Client:                m.client,
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		},
 		func() list.ListResource {
 			return resource.ListResource{
-				Name:           "tfcoremock_simple_resource",
-				InternalSchema: simple.Schema,
-				Client:         m.client,
+				Name:                  "tfcoremock_simple_resource",
+				InternalSchema:        simple.Schema,
+				Client:                m.client,
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		},
 	}
@@ -462,9 +482,10 @@ func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.Li
 		listResourceSchema := schema
 		listResources = append(listResources, func() list.ListResource {
 			return resource.ListResource{
-				Name:           listResourceName,
-				InternalSchema: listResourceSchema,
-				Client:         m.client,
+				Name:                  listResourceName,
+				InternalSchema:        listResourceSchema,
+				Client:                m.client,
+				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		})
 	}
@@ -564,6 +585,23 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 	}
 }
 
+// identitySchemaVersionFromEnv reads the identity schema version the provider
+// should declare. An unset or unparseable value leaves it at 0, the version
+// resources have always declared.
+func identitySchemaVersionFromEnv() int64 {
+	raw := os.Getenv(identitySchemaVersionEnvVarName)
+	if len(raw) == 0 {
+		return 0
+	}
+
+	version, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || version < 0 {
+		return 0
+	}
+
+	return version
+}
+
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
 		dynamicResourcesPath := "dynamic_resources.json"
@@ -572,8 +610,9 @@ func New(version string) func() provider.Provider {
 		}
 
 		return &tfcoremockProvider{
-			version: version,
-			reader:  dynamic.FileReader{File: dynamicResourcesPath},
+			version:               version,
+			reader:                dynamic.FileReader{File: dynamicResourcesPath},
+			identitySchemaVersion: identitySchemaVersionFromEnv(),
 		}
 	}
 }
@@ -581,8 +620,9 @@ func New(version string) func() provider.Provider {
 func NewForTesting(version string, resources string) func() provider.Provider {
 	return func() provider.Provider {
 		return &tfcoremockProvider{
-			version: version,
-			reader:  dynamic.StringReader{Data: resources},
+			version:               version,
+			reader:                dynamic.StringReader{Data: resources},
+			identitySchemaVersion: identitySchemaVersionFromEnv(),
 		}
 	}
 }

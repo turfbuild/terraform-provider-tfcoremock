@@ -30,6 +30,7 @@ var _ resource.Resource = Resource{}
 var _ resource.ResourceWithIdentity = Resource{}
 var _ resource.ResourceWithImportState = Resource{}
 var _ resource.ResourceWithModifyPlan = Resource{}
+var _ resource.ResourceWithUpgradeIdentity = Resource{}
 
 type Resource struct {
 	Name           string
@@ -41,6 +42,10 @@ type Resource struct {
 	FailOnRead   []string
 	FailOnUpdate []string
 	DeferChanges []string
+
+	// IdentitySchemaVersion selects which version of the identity schema this
+	// resource declares. See IdentitySchema.
+	IdentitySchemaVersion int64
 
 	// StrictIdentity makes the prior identity a client sends observable by
 	// asserting it. This provider derives every identity it reports from its own
@@ -61,12 +66,75 @@ func (r Resource) Schema(ctx context.Context, request resource.SchemaRequest, re
 	}
 }
 
+// IdentitySchema describes the resource's identity at the version this provider
+// was started with.
+//
+// Version 1 adds a `urn`, derived from the id, so that a client can be driven
+// across an identity schema bump and exercise UpgradeIdentity. Keep the shape in
+// step with data.Resource.Identity, which builds the matching value.
 func (r Resource) IdentitySchema(ctx context.Context, request resource.IdentitySchemaRequest, response *resource.IdentitySchemaResponse) {
+	attributes := map[string]identityschema.Attribute{
+		"id": identityschema.StringAttribute{
+			RequiredForImport: true,
+			Description:       "The ID of the resource.",
+		},
+	}
+
+	if r.IdentitySchemaVersion >= 1 {
+		attributes["urn"] = identityschema.StringAttribute{
+			// Derived from the id, so requiring it for import would make an
+			// import block carry redundant information.
+			OptionalForImport: true,
+			Description:       "The URN of the resource, derived from its ID.",
+		}
+	}
+
 	response.IdentitySchema = identityschema.Schema{
-		Attributes: map[string]identityschema.Attribute{
-			"id": identityschema.StringAttribute{
-				RequiredForImport: true,
-				Description:       "The ID of the resource.",
+		Version:    r.IdentitySchemaVersion,
+		Attributes: attributes,
+	}
+}
+
+// UpgradeIdentity migrates an identity recorded against an older version of the
+// identity schema. Identity is versioned separately from the resource schema,
+// and only the provider knows how to read an older version's shape.
+func (r Resource) UpgradeIdentity(ctx context.Context) map[int64]resource.IdentityUpgrader {
+	if r.IdentitySchemaVersion < 1 {
+		// Nothing to upgrade from at version 0.
+		return nil
+	}
+
+	return map[int64]resource.IdentityUpgrader{
+		// Version 0 recorded only the id; the urn is derived from it.
+		0: {
+			IdentityUpgrader: func(ctx context.Context, request resource.UpgradeIdentityRequest, response *resource.UpgradeIdentityResponse) {
+				var prior struct {
+					Id string `tfsdk:"id"`
+				}
+				if request.RawIdentity == nil {
+					response.Diagnostics.AddError("failed to upgrade identity", "no prior identity was supplied")
+					return
+				}
+
+				rawType := tftypes.Object{AttributeTypes: map[string]tftypes.Type{"id": tftypes.String}}
+				value, err := request.RawIdentity.Unmarshal(rawType)
+				if err != nil {
+					response.Diagnostics.AddError("failed to upgrade identity", err.Error())
+					return
+				}
+
+				var raw map[string]tftypes.Value
+				if err := value.As(&raw); err != nil {
+					response.Diagnostics.AddError("failed to upgrade identity", err.Error())
+					return
+				}
+				if err := raw["id"].As(&prior.Id); err != nil {
+					response.Diagnostics.AddError("failed to upgrade identity", err.Error())
+					return
+				}
+
+				response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("id"), prior.Id)...)
+				response.Diagnostics.Append(response.Identity.SetAttribute(ctx, path.Root("urn"), data.Urn(prior.Id))...)
 			},
 		},
 	}
@@ -109,7 +177,7 @@ func (r Resource) Create(ctx context.Context, request resource.CreateRequest, re
 	}
 
 	response.Diagnostics.Append(response.State.Set(ctx, resource)...)
-	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity())...)
+	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 }
 
 func (r Resource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -138,7 +206,7 @@ func (r Resource) Read(ctx context.Context, request resource.ReadRequest, respon
 			// that doesn't exist but Terraform thinks it does. We treat this
 			// as "drift" and let the Terraform framework handle it.
 			response.State.RemoveResource(ctx)
-			response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity())...)
+			response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 			return
 		}
 		response.Diagnostics.AddError("failed to read resource", err.Error())
@@ -153,7 +221,7 @@ func (r Resource) Read(ctx context.Context, request resource.ReadRequest, respon
 
 	typ := request.State.Schema.Type().TerraformType(ctx)
 	response.Diagnostics.Append(response.State.Set(ctx, data.WithType(typ.(tftypes.Object)))...)
-	response.Diagnostics.Append(response.Identity.Set(ctx, data.Identity())...)
+	response.Diagnostics.Append(response.Identity.Set(ctx, data.Identity(r.IdentitySchemaVersion))...)
 }
 
 func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, response *resource.UpdateResponse) {
@@ -180,7 +248,7 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 	}
 
 	response.Diagnostics.Append(response.State.Set(ctx, resource)...)
-	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity())...)
+	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 }
 
 func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
@@ -201,7 +269,7 @@ func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, re
 	}
 
 	response.State.RemoveResource(ctx)
-	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity())...)
+	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 }
 
 func (r Resource) ImportState(ctx context.Context, request resource.ImportStateRequest, response *resource.ImportStateResponse) {
