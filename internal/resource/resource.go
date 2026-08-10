@@ -189,7 +189,15 @@ func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, re
 }
 
 func (r Resource) ImportState(ctx context.Context, request resource.ImportStateRequest, response *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), request, response)
+	// The identity-aware passthrough handles both locators: it copies
+	// request.ID into state when the practitioner imported by id, and otherwise
+	// reads the id out of the supplied identity. ImportStatePassthroughID
+	// handles only the former — on an identity-keyed import it writes nothing,
+	// and because the framework's "missing import state" guard is itself gated
+	// on a non-empty request.ID, an all-null state is returned with no
+	// diagnostic. The read that follows then dereferences an absent id and
+	// panics, taking the plugin process down.
+	resource.ImportStatePassthroughWithIdentity(ctx, path.Root("id"), path.Root("id"), request, response)
 }
 
 func (r Resource) ModifyPlan(ctx context.Context, request resource.ModifyPlanRequest, response *resource.ModifyPlanResponse) {
