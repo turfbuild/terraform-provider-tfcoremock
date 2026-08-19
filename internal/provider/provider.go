@@ -103,6 +103,8 @@ type tfcoremockProvider struct {
 
 	strictIdentity bool
 
+	strictPrivateState bool
+
 	// identitySchemaVersion is read from the environment at construction; see
 	// identitySchemaVersionEnvVarName.
 	identitySchemaVersion int64
@@ -128,6 +130,14 @@ type providerData struct {
 	// every identity it reports from its own state rather than echoing the one
 	// it was given.
 	StrictIdentity types.Bool `tfsdk:"strict_identity"`
+
+	// StrictPrivateState turns a client's private-state bookkeeping into an
+	// observable: when true, resources record a private-state marker on create
+	// (and import) and fail any later call that does not carry it back exactly.
+	// Without it the round-trip is invisible from the outside — the framework
+	// pre-populates each response's private state from the request, so even a
+	// client that dropped the blob entirely would look correct.
+	StrictPrivateState types.Bool `tfsdk:"strict_private_state"`
 
 	// Cluster is a block-typed config attribute (NestingList, encoded as a list
 	// of objects) that exercises a downstream consumer's schema-aware
@@ -201,6 +211,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnInvoke = failOnInvoke
 	m.deferChanges = deferChanges
 	m.strictIdentity = data.StrictIdentity.ValueBool()
+	m.strictPrivateState = data.StrictPrivateState.ValueBool()
 
 	// The 'cluster' nested block is inert except as an observation channel:
 	// when a known host is supplied with fail = true, fail Configure with a
@@ -280,6 +291,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
 
+				StrictPrivateState: m.strictPrivateState,
+
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
 		},
@@ -294,6 +307,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
+
+				StrictPrivateState: m.strictPrivateState,
 
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
@@ -331,6 +346,8 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
+
+				StrictPrivateState: m.strictPrivateState,
 
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
@@ -553,6 +570,11 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set to true, resources assert that the prior identity Terraform sends matches the protocol's rules: null when planning a create, and equal to the recorded id when reading. Defaults to `false`.",
 				MarkdownDescription: "If set to true, resources assert that the prior identity Terraform sends matches the protocol's rules: null when planning a create, and equal to the recorded id when reading. Defaults to `false`.",
+			},
+			"strict_private_state": provider_schema.BoolAttribute{
+				Optional:            true,
+				Description:         "If set to true, resources record a private-state marker on create and import, and assert that every later plan, read, update, and delete hands that marker back: absent when planning a create, and matching the recorded id otherwise. Defaults to `false`.",
+				MarkdownDescription: "If set to true, resources record a private-state marker on create and import, and assert that every later plan, read, update, and delete hands that marker back: absent when planning a create, and matching the recorded id otherwise. Defaults to `false`.",
 			},
 		},
 		Blocks: map[string]provider_schema.Block{
