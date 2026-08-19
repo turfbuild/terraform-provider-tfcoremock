@@ -5,6 +5,7 @@ package resource
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
@@ -53,6 +54,14 @@ type Resource struct {
 	// carried the wrong one — or none at all — would still see the right answer
 	// come back. See assertPriorIdentity.
 	StrictIdentity bool
+
+	// StrictPrivateState makes a client's private-state round-trip observable:
+	// create and import record a marker in private state, and every later call
+	// that should carry the object's private state asserts it came back exactly.
+	// The framework pre-populates each response's private state from the
+	// request, so without the assertion even a client that dropped the blob
+	// entirely would look correct. See assertPrivateMarker.
+	StrictPrivateState bool
 }
 
 func (r Resource) Metadata(ctx context.Context, request resource.MetadataRequest, response *resource.MetadataResponse) {
@@ -187,6 +196,9 @@ func (r Resource) Create(ctx context.Context, request resource.CreateRequest, re
 
 	response.Diagnostics.Append(response.State.Set(ctx, resource)...)
 	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
+	// The create is the call that mints the object's private state; every later
+	// call must hand this marker back.
+	r.stampPrivateMarker(ctx, response.Private, resource.GetId(), &response.Diagnostics)
 }
 
 func (r Resource) Read(ctx context.Context, request resource.ReadRequest, response *resource.ReadResponse) {
@@ -197,8 +209,9 @@ func (r Resource) Read(ctx context.Context, request resource.ReadRequest, respon
 	}
 
 	// A read refreshes an object that already exists, so it must carry that
-	// object's identity.
+	// object's identity and private state.
 	r.assertPriorIdentity(ctx, "read this resource", request.Identity, resource.GetId(), &response.Diagnostics)
+	r.assertPrivateMarker(ctx, "read this resource", request.Private, resource.GetId(), &response.Diagnostics)
 	if response.Diagnostics.HasError() {
 		return
 	}
@@ -241,6 +254,14 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 	}
 	resource.ResourceType = r.Name
 
+	// An update applies to an object that exists, so the planned private state
+	// the apply delivers must carry the object's marker — this is what pins the
+	// plan-response → apply threading on the client's side.
+	r.assertPrivateMarker(ctx, "update this resource", request.Private, resource.GetId(), &response.Diagnostics)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
 	if err := computed.GenerateComputedValues(resource, r.InternalSchema); err != nil {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to generate computed values", err.Error()))
 		return
@@ -258,11 +279,20 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 
 	response.Diagnostics.Append(response.State.Set(ctx, resource)...)
 	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
+	// A state-producing call returns the blob anew.
+	r.stampPrivateMarker(ctx, response.Private, resource.GetId(), &response.Diagnostics)
 }
 
 func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
 	resource := &data.Resource{}
 	response.Diagnostics.Append(request.State.Get(ctx, &resource)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// The delete is the last call the object sees, and it must still carry the
+	// private state the most recent state-producing call returned.
+	r.assertPrivateMarker(ctx, "delete this resource", request.Private, resource.GetId(), &response.Diagnostics)
 	if response.Diagnostics.HasError() {
 		return
 	}
@@ -309,6 +339,10 @@ func (r Resource) ImportState(ctx context.Context, request resource.ImportStateR
 	value := id.ValueString()
 	imported := data.Resource{Values: map[string]data.Value{"id": {String: &value}}}
 	response.Diagnostics.Append(response.Identity.Set(ctx, imported.Identity(r.IdentitySchemaVersion))...)
+	// An import brings an object under management, so it mints the private
+	// state the same way create does — the client must carry it from adoption
+	// onward.
+	r.stampPrivateMarker(ctx, response.Private, value, &response.Diagnostics)
 }
 
 // assertPriorIdentity checks the identity a client sent alongside prior state
@@ -354,6 +388,93 @@ func (r Resource) assertPriorIdentity(ctx context.Context, op string, identity *
 	}
 }
 
+// privateMarkerKey is the private-state key strict_private_state records its
+// marker under. The framework requires keys without a leading "." (reserved)
+// and values that are valid JSON.
+const privateMarkerKey = "state_marker"
+
+// privateData is the surface of the framework's private-state accessor
+// (*privatestate.ProviderData, carried on every request/response as Private)
+// that the marker logic needs. An interface because the concrete type lives in
+// the framework's internal/ tree; both of its methods are nil-receiver safe,
+// so call sites pass request/response Private fields through unguarded.
+type privateData interface {
+	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+// privateMarker is the JSON shape stored under privateMarkerKey. Deriving it
+// from the object's own id makes the assertion per-object: a blob carried over
+// from a different object fails, not just a missing one.
+type privateMarker struct {
+	ID string `json:"id"`
+}
+
+// markerBytes builds the private-state marker for one object id.
+func markerBytes(id string) []byte {
+	b, _ := json.Marshal(privateMarker{ID: id})
+	return b
+}
+
+// stampPrivateMarker records the marker for id in a response's private state,
+// when strict_private_state is on. Called by the calls that bring an object
+// into being (create, import) and by update, which as a state-producing call
+// returns the blob anew.
+func (r Resource) stampPrivateMarker(ctx context.Context, private privateData, id string, diags *diag.Diagnostics) {
+	if !r.StrictPrivateState {
+		return
+	}
+	diags.Append(private.SetKey(ctx, privateMarkerKey, markerBytes(id))...)
+}
+
+// assertPrivateMarker checks the private state a client sent alongside prior
+// state, when strict_private_state is on. op names the call for the
+// diagnostic. A wantID of "" means the call must carry no marker at all, which
+// is the rule for planning a create: no call has produced the object yet, so
+// none can have returned private state for it — and on the create half of a
+// replace, a blob leaking across from the object being destroyed would hand
+// the new object the old one's private state.
+func (r Resource) assertPrivateMarker(ctx context.Context, op string, private privateData, wantID string, diags *diag.Diagnostics) {
+	if !r.StrictPrivateState {
+		return
+	}
+
+	got, d := private.GetKey(ctx, privateMarkerKey)
+	diags.Append(d...)
+	if diags.HasError() {
+		return
+	}
+
+	if wantID == "" {
+		if got != nil {
+			diags.AddError(
+				"unexpected private state",
+				fmt.Sprintf("strict_private_state is set and this call to %s carried a private-state marker, but the resource does not exist yet so no call can have returned one.", op))
+		}
+		return
+	}
+
+	if got == nil {
+		diags.AddError(
+			"missing private state",
+			fmt.Sprintf("strict_private_state is set and this call to %s carried no private-state marker, but the resource is recorded with id %q: the private state returned when it was created was not handed back.", op, wantID))
+		return
+	}
+
+	var marker privateMarker
+	if err := json.Unmarshal(got, &marker); err != nil {
+		diags.AddError(
+			"malformed private state",
+			fmt.Sprintf("strict_private_state is set and this call to %s carried a private-state marker that does not parse: %s.", op, err))
+		return
+	}
+	if marker.ID != wantID {
+		diags.AddError(
+			"private state does not match",
+			fmt.Sprintf("strict_private_state is set and this call to %s carried the private-state marker of %q, but the resource is recorded with id %q.", op, marker.ID, wantID))
+	}
+}
+
 // priorID returns the id recorded in prior state, and whether one was recorded.
 func priorID(ctx context.Context, state tfsdk.State, diags *diag.Diagnostics) (string, bool) {
 	if state.Raw.IsNull() {
@@ -376,11 +497,20 @@ func priorID(ctx context.Context, state tfsdk.State, diags *diag.Diagnostics) (s
 func (r Resource) ModifyPlan(ctx context.Context, request resource.ModifyPlanRequest, response *resource.ModifyPlanResponse) {
 	// A null plan is a destroy, which carries the prior identity and has no
 	// rule of its own to check.
-	if r.StrictIdentity && !request.Plan.Raw.IsNull() {
+	if !request.Plan.Raw.IsNull() {
 		// A null prior state means this plans a create — including the create
 		// half of a replace, which is the case worth pinning.
 		wantID, _ := priorID(ctx, request.State, &response.Diagnostics)
-		r.assertPriorIdentity(ctx, "plan a change to this resource", request.Identity, wantID, &response.Diagnostics)
+		if r.StrictIdentity {
+			r.assertPriorIdentity(ctx, "plan a change to this resource", request.Identity, wantID, &response.Diagnostics)
+			if response.Diagnostics.HasError() {
+				return
+			}
+		}
+		// The plan is where a client's prior private state becomes visible on
+		// the wire: an update plan must carry the object's marker, and a create
+		// plan must carry none.
+		r.assertPrivateMarker(ctx, "plan a change to this resource", request.Private, wantID, &response.Diagnostics)
 		if response.Diagnostics.HasError() {
 			return
 		}
