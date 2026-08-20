@@ -229,6 +229,11 @@ func (r Resource) Read(ctx context.Context, request resource.ReadRequest, respon
 			// as "drift" and let the Terraform framework handle it.
 			response.State.RemoveResource(ctx)
 			response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
+			// The private state describes an object that no longer exists, and
+			// the client carries whatever this read returns straight into the
+			// plan of the create that replaces it — where the marker would fail
+			// the assertion this provider makes of a null prior.
+			r.clearPrivateMarker(ctx, response.Private, &response.Diagnostics)
 			return
 		}
 		response.Diagnostics.AddError("failed to read resource", err.Error())
@@ -425,6 +430,20 @@ func (r Resource) stampPrivateMarker(ctx context.Context, private privateData, i
 		return
 	}
 	diags.Append(private.SetKey(ctx, privateMarkerKey, markerBytes(id))...)
+}
+
+// clearPrivateMarker drops the marker from a response's private state, when
+// strict_private_state is on. The framework pre-populates each response's
+// private state from the request, so a read that reports the object gone would
+// otherwise hand back a null state carrying the marker of an object that no
+// longer exists — a pairing this provider's own plan-time assertion rejects,
+// and one no well-behaved provider produces. The private state belongs to the
+// object; when the object is gone, so is it.
+func (r Resource) clearPrivateMarker(ctx context.Context, private privateData, diags *diag.Diagnostics) {
+	if !r.StrictPrivateState {
+		return
+	}
+	diags.Append(private.SetKey(ctx, privateMarkerKey, nil)...)
 }
 
 // assertPrivateMarker checks the private state a client sent alongside prior
