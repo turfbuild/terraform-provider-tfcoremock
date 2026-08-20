@@ -134,3 +134,28 @@ func TestResource_stampPrivateMarker(t *testing.T) {
 		t.Errorf("nothing should be stamped when strict_private_state is off, got %v", off.data)
 	}
 }
+
+// A read that finds the object gone must leave no marker behind: the framework
+// pre-populates the response's private state from the request, and the client
+// carries what the read returns into the plan of the create that follows —
+// where a marker beside a null prior is exactly what the assertion rejects.
+func TestResource_clearPrivateMarker(t *testing.T) {
+	private := &fakePrivateData{data: map[string][]byte{privateMarkerKey: markerBytes("my-id")}}
+	var diags diag.Diagnostics
+	Resource{StrictPrivateState: true}.clearPrivateMarker(context.Background(), private, &diags)
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+
+	// The cleared state is what a create must carry: no marker at all.
+	Resource{StrictPrivateState: true}.assertPrivateMarker(context.Background(), "test", private, "", &diags)
+	if diags.HasError() {
+		t.Errorf("a cleared marker must satisfy the create rule: %v", diags)
+	}
+
+	off := &fakePrivateData{data: map[string][]byte{privateMarkerKey: markerBytes("my-id")}}
+	Resource{StrictPrivateState: false}.clearPrivateMarker(context.Background(), off, &diags)
+	if len(off.data) != 1 {
+		t.Errorf("nothing should be cleared when strict_private_state is off, got %v", off.data)
+	}
+}
