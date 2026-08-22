@@ -139,6 +139,16 @@ type providerData struct {
 	// client that dropped the blob entirely would look correct.
 	StrictPrivateState types.Bool `tfsdk:"strict_private_state"`
 
+	// DeferOnUnknownConfig makes this provider ACCEPT a configuration carrying
+	// unknown values and then defer every resource served by it, with reason
+	// PROVIDER_CONFIG_UNKNOWN — which is what terraform-plugin-sdk providers
+	// (kubernetes, helm) do. Without it this provider takes the other route: an
+	// unknown in one of the list-typed attributes fails Configure outright, so
+	// the instance is never configured at all. Both are legal, they reach a
+	// client through completely different paths, and a client that handles only
+	// one of them is broken against half the ecosystem.
+	DeferOnUnknownConfig types.Bool `tfsdk:"defer_on_unknown_config"`
+
 	// Cluster is a block-typed config attribute (NestingList, encoded as a list
 	// of objects) that exercises a downstream consumer's schema-aware
 	// object->list-of-one coercion for a nested provider-config block — the
@@ -160,6 +170,21 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	var data providerData
 	response.Diagnostics.Append(request.Config.Get(ctx, &data)...)
 	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// Take the configuration as it stands and defer everything served by it,
+	// rather than refusing it. Checked before anything reads the config, since
+	// the point is that the unknown values are never inspected.
+	if data.DeferOnUnknownConfig.ValueBool() && !request.Config.Raw.IsFullyKnown() {
+		if !request.ClientCapabilities.DeferralAllowed {
+			response.Diagnostics.AddError(
+				"Cannot defer on unknown configuration",
+				"defer_on_unknown_config is set and the configuration carries unknown values, "+
+					"but this client did not announce deferral support.")
+			return
+		}
+		response.Deferred = &provider.Deferred{Reason: provider.DeferredReasonProviderConfigUnknown}
 		return
 	}
 
@@ -565,6 +590,11 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
 				MarkdownDescription: "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
+			},
+			"defer_on_unknown_config": provider_schema.BoolAttribute{
+				Optional:            true,
+				Description:         "If set to true, a configuration carrying unknown values is ACCEPTED and every resource served by this provider is deferred with reason PROVIDER_CONFIG_UNKNOWN, the way terraform-plugin-sdk providers behave. Defaults to `false`, under which an unknown in a list-typed attribute fails Configure instead. Defaults to `false`.",
+				MarkdownDescription: "If set to true, a configuration carrying unknown values is ACCEPTED and every resource served by this provider is deferred with reason `PROVIDER_CONFIG_UNKNOWN`, the way terraform-plugin-sdk providers behave. Defaults to `false`, under which an unknown in a list-typed attribute fails Configure instead.",
 			},
 			"strict_identity": provider_schema.BoolAttribute{
 				Optional:            true,
