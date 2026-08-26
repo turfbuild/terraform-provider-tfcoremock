@@ -45,13 +45,17 @@ func asResourceBool(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	if attribute.Computed {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, boolplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, boolplanmodifier.RequiresReplace())
 	}
 
@@ -68,13 +72,17 @@ func asResourceFloat(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	if attribute.Computed {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, float64planmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, float64planmodifier.RequiresReplace())
 	}
 
@@ -91,13 +99,17 @@ func asResourceInteger(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	if attribute.Computed {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, int64planmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, int64planmodifier.RequiresReplace())
 	}
 
@@ -114,13 +126,17 @@ func asResourceNumber(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	if attribute.Computed {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, numberplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, numberplanmodifier.RequiresReplace())
 	}
 
@@ -137,13 +153,17 @@ func asResourceString(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	if attribute.Computed {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, stringplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, stringplanmodifier.RequiresReplace())
 	}
 
@@ -160,6 +180,7 @@ func asResourceList(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	elem, err := ToTerraformAttribute(*attribute.List, resources)
@@ -172,7 +193,10 @@ func asResourceList(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, listplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, listplanmodifier.RequiresReplace())
 	}
 
@@ -189,6 +213,7 @@ func asResourceNestedList(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	var err error
@@ -200,7 +225,10 @@ func asResourceNestedList(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, listplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, listplanmodifier.RequiresReplace())
 	}
 
@@ -217,6 +245,7 @@ func asResourceMap(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	elem, err := ToTerraformAttribute(*attribute.Map, resources)
@@ -229,7 +258,10 @@ func asResourceMap(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, mapplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, mapplanmodifier.RequiresReplace())
 	}
 
@@ -246,6 +278,7 @@ func asResourceNestedMap(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	var err error
@@ -257,7 +290,10 @@ func asResourceNestedMap(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, mapplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, mapplanmodifier.RequiresReplace())
 	}
 
@@ -274,6 +310,8 @@ func asResourceSet(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		// Set attributes cannot be write-only: the protocol has no way to
+		// address an element of a set, so there is no path to null out.
 	}
 
 	elem, err := ToTerraformAttribute(*attribute.Set, resources)
@@ -286,7 +324,10 @@ func asResourceSet(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, setplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, setplanmodifier.RequiresReplace())
 	}
 
@@ -303,6 +344,8 @@ func asResourceNestedSet(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		// Set attributes cannot be write-only: the protocol has no way to
+		// address an element of a set, so there is no path to null out.
 	}
 
 	var err error
@@ -314,7 +357,10 @@ func asResourceNestedSet(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, setplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, setplanmodifier.RequiresReplace())
 	}
 
@@ -331,6 +377,7 @@ func asResourceObject(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	types := make(map[string]attr.Type)
@@ -347,7 +394,10 @@ func asResourceObject(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, objectplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, objectplanmodifier.RequiresReplace())
 	}
 
@@ -364,6 +414,7 @@ func asResourceNestedObject(attribute Attribute) (*schema.Attribute, error) {
 		Required:            attribute.Required,
 		Computed:            attribute.Computed,
 		Sensitive:           attribute.Sensitive,
+		WriteOnly:           attribute.WriteOnly,
 	}
 
 	var err error
@@ -375,7 +426,10 @@ func asResourceNestedObject(attribute Attribute) (*schema.Attribute, error) {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, objectplanmodifier.UseStateForUnknown())
 	}
 
-	if attribute.Replace {
+	// A write-only attribute is null on both sides of every plan, so the
+	// stock RequiresReplace modifier can never fire for one; ModifyPlan
+	// handles that case by comparing what the mock actually stored.
+	if attribute.Replace && !attribute.WriteOnly {
 		tfAttribute.PlanModifiers = append(tfAttribute.PlanModifiers, objectplanmodifier.RequiresReplace())
 	}
 

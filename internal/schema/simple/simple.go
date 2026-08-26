@@ -43,6 +43,24 @@ var (
 				Optional:            true,
 				Type:                schema.Integer,
 			},
+			// A write-only attribute, so that the "value reaches the provider
+			// but never reaches state" contract can be exercised end to end. No
+			// released provider offers one without cloud credentials, which is
+			// why it lives here.
+			//
+			// Replace is set because the interesting case is the one a
+			// write-only attribute makes structurally invisible: prior and
+			// planned are both null, so nothing downstream can tell from the
+			// values alone that the secret changed. ModifyPlan compares what
+			// was actually stored and reports this path as requires-replace.
+			"string_wo": {
+				Description:         "An optional write-only string attribute. Its value reaches the provider on every request but is never written to state.",
+				MarkdownDescription: "An optional write-only string attribute. Its value reaches the provider on every request but is never written to state.",
+				Optional:            true,
+				Type:                schema.String,
+				WriteOnly:           true,
+				Replace:             true,
+			},
 		},
 	}
 )

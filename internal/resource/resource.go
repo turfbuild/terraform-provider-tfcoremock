@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"sort"
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
@@ -184,6 +185,12 @@ func (r Resource) Create(ctx context.Context, request resource.CreateRequest, re
 		return
 	}
 
+	// Write-only values live only in the config; see applyWriteOnlyFromConfig.
+	r.applyWriteOnlyFromConfig(ctx, request.Config, resource, &response.Diagnostics)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
 	if slices.Contains(r.FailOnCreate, resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to create resource", "forced failure"))
 		return
@@ -272,6 +279,12 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 		return
 	}
 
+	// Write-only values live only in the config; see applyWriteOnlyFromConfig.
+	r.applyWriteOnlyFromConfig(ctx, request.Config, resource, &response.Diagnostics)
+	if response.Diagnostics.HasError() {
+		return
+	}
+
 	if slices.Contains(r.FailOnUpdate, resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to update resource", "forced failure"))
 		return
@@ -286,6 +299,91 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 	// A state-producing call returns the blob anew.
 	r.stampPrivateMarker(ctx, response.Private, resource.GetId(), &response.Diagnostics)
+}
+
+// writeOnlyNames returns the names of this resource's top-level write-only
+// attributes, in declaration-independent (sorted) order.
+func (r Resource) writeOnlyNames() []string {
+	var out []string
+	for name, attr := range r.InternalSchema.Attributes {
+		if attr.WriteOnly {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// applyWriteOnlyFromConfig copies each write-only attribute's value out of the
+// CONFIG and into the object the mock is about to store.
+//
+// The config is the only place the value exists. A write-only attribute is null
+// in the plan and null in the state by definition, so a provider that reads it
+// from request.Plan — as every other attribute here is read — would receive
+// nothing. Real providers have the same obligation; making the mock honour it is
+// what lets a test prove the value actually ARRIVED, rather than proving only
+// that state does not contain it (which a completely unwired feature would also
+// satisfy).
+//
+// The mock's data file is its "remote system", so the value landing there is the
+// observable arrival. The framework nullifies the same attributes in the
+// response state, so it does not follow the object back to the client.
+func (r Resource) applyWriteOnlyFromConfig(ctx context.Context, config tfsdk.Config, res *data.Resource, diags *diag.Diagnostics) {
+	for _, name := range r.writeOnlyNames() {
+		var val types.String
+		if d := config.GetAttribute(ctx, path.Root(name), &val); d.HasError() {
+			diags.Append(d...)
+			return
+		}
+		if val.IsNull() || val.IsUnknown() {
+			delete(res.Values, name)
+			continue
+		}
+		s := val.ValueString()
+		res.Values[name] = data.Value{String: &s}
+	}
+}
+
+// writeOnlyChanged reports whether any write-only attribute marked Replace has a
+// configured value differing from the one the mock stored, and returns the paths
+// that differ.
+//
+// This is the only way a change to a write-only attribute can be detected at
+// all: prior state and planned state both hold null for it, so no equality test
+// downstream of the provider can see the difference. Comparing against what was
+// actually stored is a genuine comparison, not an inference — the mock is the
+// remote system here, and it is the only party that knows the old value.
+func (r Resource) writeOnlyReplacePaths(ctx context.Context, config tfsdk.Config, stored *data.Resource, diags *diag.Diagnostics) []path.Path {
+	var out []path.Path
+	for _, name := range r.writeOnlyNames() {
+		if !r.InternalSchema.Attributes[name].Replace {
+			continue
+		}
+		var val types.String
+		if d := config.GetAttribute(ctx, path.Root(name), &val); d.HasError() {
+			diags.Append(d...)
+			return nil
+		}
+		var want *string
+		if !val.IsNull() && !val.IsUnknown() {
+			s := val.ValueString()
+			want = &s
+		}
+		var have *string
+		if stored != nil {
+			if v, ok := stored.Values[name]; ok {
+				have = v.String
+			}
+		}
+		switch {
+		case want == nil && have == nil:
+		case want == nil || have == nil:
+			out = append(out, path.Root(name))
+		case *want != *have:
+			out = append(out, path.Root(name))
+		}
+	}
+	return out
 }
 
 func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, response *resource.DeleteResponse) {
@@ -532,6 +630,27 @@ func (r Resource) ModifyPlan(ctx context.Context, request resource.ModifyPlanReq
 		r.assertPrivateMarker(ctx, "plan a change to this resource", request.Private, wantID, &response.Diagnostics)
 		if response.Diagnostics.HasError() {
 			return
+		}
+	}
+
+	// An update to a write-only attribute is invisible to every equality test
+	// downstream: prior and planned both hold null for it by definition. Only
+	// the remote system knows the old value, so the mock — which is the remote
+	// system here — is the one that has to say the change happened, by naming
+	// the path as requires-replace. Skipped on create and destroy, where the
+	// action is not in question.
+	if !request.Plan.Raw.IsNull() && !request.State.Raw.IsNull() {
+		stored := &data.Resource{}
+		if d := request.State.Get(ctx, &stored); !d.HasError() {
+			if id, ok := stored.Values["id"]; ok && id.String != nil {
+				if remote, err := r.Client.ReadResource(ctx, *id.String); err == nil && remote != nil {
+					paths := r.writeOnlyReplacePaths(ctx, request.Config, remote, &response.Diagnostics)
+					if response.Diagnostics.HasError() {
+						return
+					}
+					response.RequiresReplace = append(response.RequiresReplace, paths...)
+				}
+			}
 		}
 	}
 

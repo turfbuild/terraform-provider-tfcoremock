@@ -45,6 +45,18 @@ type Attribute struct {
 	Sensitive bool `json:"sensitive"` // True if values for this attribute should be hidden in the plan.
 	Replace   bool `json:"replace"`   // True if the resource should be replaced when this attribute changes.
 
+	// WriteOnly marks the attribute write-only: Terraform sends its value on
+	// every request and the provider must return null for it, so the value acts
+	// on the remote system without ever being persisted to state. It is only
+	// meaningful on resources — data sources have no such concept — and the
+	// framework nullifies it in responses for us.
+	//
+	// Pairing WriteOnly with Replace is the reason ModifyPlan has a write-only
+	// arm: the ordinary RequiresReplace plan modifier compares prior state to
+	// planned state, and for a write-only attribute both are null by
+	// definition, so it can never fire. See Resource.ModifyPlan.
+	WriteOnly bool `json:"write_only"`
+
 	// SkipNestedMetadata instructs the dynamic resource to not use the nested
 	// attribute field when building element and attribute types of complex
 	// attributes (list, map, object, and set).
