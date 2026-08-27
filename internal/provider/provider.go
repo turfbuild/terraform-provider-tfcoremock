@@ -7,12 +7,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/list"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -30,6 +32,7 @@ import (
 var _ provider.Provider = &tfcoremockProvider{}
 var _ provider.ProviderWithActions = &tfcoremockProvider{}
 var _ provider.ProviderWithListResources = &tfcoremockProvider{}
+var _ provider.ProviderWithEphemeralResources = &tfcoremockProvider{}
 
 const (
 	description = `The 'tfcoremock' provider is intended to aid with testing the Terraform core libraries and the Terraform CLI. This provider should allow users to define all possible Terraform configurations and run them through the Terraform core platform.
@@ -99,7 +102,14 @@ type tfcoremockProvider struct {
 	failOnRead   []string
 	failOnDelete []string
 	failOnInvoke []string
+	failOnOpen   []string
 	deferChanges []string
+
+	// ephemeralAuditDirectory is where the ephemeral resource records its
+	// lifecycle. It is derived from the resource directory rather than
+	// configured separately, and is empty under use_only_state — that mode has
+	// no resource directory, so there is nowhere to record.
+	ephemeralAuditDirectory string
 
 	strictIdentity bool
 
@@ -120,6 +130,7 @@ type providerData struct {
 	FailOnRead   types.List `tfsdk:"fail_on_read"`
 	FailOnDelete types.List `tfsdk:"fail_on_delete"`
 	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
+	FailOnOpen   types.List `tfsdk:"fail_on_open"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
 
@@ -197,6 +208,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 		m.client = client.State{
 			DataDirectory: directory,
 		}
+		m.ephemeralAuditDirectory = ""
 	} else {
 		dataDirectory := "terraform.data"
 		resourceDirectory := "terraform.resource"
@@ -213,6 +225,10 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 			ResourceDirectory: resourceDirectory,
 			DataDirectory:     dataDirectory,
 		}
+		// A subdirectory rather than the resource directory itself: the local
+		// client treats every *.json file directly inside it as a managed
+		// resource, and a lifecycle record is not one.
+		m.ephemeralAuditDirectory = filepath.Join(resourceDirectory, "ephemeral")
 	}
 
 	failOnDelete, failOnDeleteDiags := parseStringList(ctx, data.FailOnDelete, "fail_on_delete")
@@ -220,6 +236,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	failOnRead, failOnReadDiags := parseStringList(ctx, data.FailOnRead, "fail_on_read")
 	failOnUpdate, failOnUpdateDiags := parseStringList(ctx, data.FailOnUpdate, "fail_on_update")
 	failOnInvoke, failOnInvokeDiags := parseStringList(ctx, data.FailOnInvoke, "fail_on_invoke")
+	failOnOpen, failOnOpenDiags := parseStringList(ctx, data.FailOnOpen, "fail_on_open")
 	deferChanges, deferChangesDiags := parseStringList(ctx, data.DeferChanges, "defer_changes")
 
 	response.Diagnostics.Append(failOnDeleteDiags...)
@@ -227,6 +244,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	response.Diagnostics.Append(failOnReadDiags...)
 	response.Diagnostics.Append(failOnUpdateDiags...)
 	response.Diagnostics.Append(failOnInvokeDiags...)
+	response.Diagnostics.Append(failOnOpenDiags...)
 	response.Diagnostics.Append(deferChangesDiags...)
 
 	m.failOnDelete = failOnDelete
@@ -234,6 +252,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnRead = failOnRead
 	m.failOnUpdate = failOnUpdate
 	m.failOnInvoke = failOnInvoke
+	m.failOnOpen = failOnOpen
 	m.deferChanges = deferChanges
 	m.strictIdentity = data.StrictIdentity.ValueBool()
 	m.strictPrivateState = data.StrictPrivateState.ValueBool()
@@ -482,6 +501,25 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 	return actions
 }
 
+// EphemeralResources returns the provider's ephemeral resources.
+//
+// There is exactly one, and it is not derived from the dynamic-resource file
+// the way resources, data sources and actions are. An ephemeral resource is not
+// a shape to be varied — it is a lifecycle to be observed — so a single
+// purpose-built type with a fixed schema says more than an arbitrary number of
+// generated ones would.
+func (m *tfcoremockProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		func() ephemeral.EphemeralResource {
+			return resource.EphemeralResource{
+				Name:           "tfcoremock_ephemeral_secret",
+				AuditDirectory: m.ephemeralAuditDirectory,
+				FailOnOpen:     m.failOnOpen,
+			}
+		},
+	}
+}
+
 func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.ListResource {
 	listResources := []func() list.ListResource{
 		func() list.ListResource {
@@ -584,6 +622,12 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any action whose config `string` attribute is in this list will fail when invoked.",
 				MarkdownDescription: "If set, any action whose config `string` attribute is in this list will fail when invoked.",
+			},
+			"fail_on_open": provider_schema.ListAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Description:         "If set, any ephemeral resources with an ID in this list will fail when opened.",
+				MarkdownDescription: "If set, any ephemeral resources with an ID in this list will fail when opened.",
 			},
 			"defer_changes": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
