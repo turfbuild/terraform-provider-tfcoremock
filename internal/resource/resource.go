@@ -321,20 +321,28 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 // configuration) observes it; strike files live in their own subdirectory and
 // never appear as managed resources.
 func (r Resource) forcedFailure(list []string, op string, id string) bool {
+	return forcedFailure(list, r.FailOnceDir, op, id)
+}
+
+// forcedFailure is the injection itself, free of the resource it fires on so
+// the data source shares it verbatim. The op string is part of the strike key,
+// so a managed read and a data-source read of the same id are independent
+// one-shots.
+func forcedFailure(list []string, failOnceDir, op, id string) bool {
 	if !slices.Contains(list, id) {
 		return false
 	}
-	if r.FailOnceDir == "" {
+	if failOnceDir == "" {
 		return true
 	}
-	strike := filepath.Join(r.FailOnceDir, fmt.Sprintf("%s-%s", op, url.PathEscape(id)))
+	strike := filepath.Join(failOnceDir, fmt.Sprintf("%s-%s", op, url.PathEscape(id)))
 	if _, err := os.Stat(strike); err == nil {
 		return false
 	}
 	// Best-effort on purpose: if the strike cannot be recorded the injection
 	// simply keeps firing, which is the static behavior and loudly visible,
 	// where a swallowed failure-to-fail would be neither.
-	if err := os.MkdirAll(r.FailOnceDir, 0700); err == nil {
+	if err := os.MkdirAll(failOnceDir, 0700); err == nil {
 		_ = os.WriteFile(strike, []byte(op+" "+id+"\n"), 0600)
 	}
 	return true

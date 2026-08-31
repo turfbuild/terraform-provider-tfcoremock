@@ -53,3 +53,23 @@ func TestForcedFailureOnce(t *testing.T) {
 		t.Fatal("a second provider over the same directory must observe the strike")
 	}
 }
+
+// TestForcedFailureDataSourceIsItsOwnOperation proves a data source read
+// injects independently of a managed read: the two share fail_on_read but not
+// the strike, so a fixture that fails a data read of an id does not silently
+// spend the one-shot a managed read of the same id would have used.
+func TestForcedFailureDataSourceIsItsOwnOperation(t *testing.T) {
+	dir := t.TempDir()
+	d := DataSource{FailOnRead: []string{"shared"}, FailOnceDir: dir}
+	r := Resource{FailOnRead: []string{"shared"}, FailOnceDir: dir}
+
+	if !forcedFailure(d.FailOnRead, d.FailOnceDir, "read-data", "shared") {
+		t.Fatal("the data source read's first triggered call must fail")
+	}
+	if forcedFailure(d.FailOnRead, d.FailOnceDir, "read-data", "shared") {
+		t.Fatal("the data source read's second call must see the strike and succeed")
+	}
+	if !r.forcedFailure(r.FailOnRead, "read", "shared") {
+		t.Fatal("the managed read still has its own first failure to spend")
+	}
+}

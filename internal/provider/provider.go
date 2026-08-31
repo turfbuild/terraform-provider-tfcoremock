@@ -437,6 +437,8 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Name:           "tfcoremock_complex_resource",
 				InternalSchema: complex.Schema(3),
 				Client:         m.client,
+				FailOnRead:     m.failOnRead,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
 		func() datasource.DataSource {
@@ -444,6 +446,8 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Name:           "tfcoremock_simple_resource",
 				InternalSchema: simple.Schema,
 				Client:         m.client,
+				FailOnRead:     m.failOnRead,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
 	}
@@ -473,6 +477,8 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Name:           datasourceName,
 				InternalSchema: datasourceSchema,
 				Client:         m.client,
+				FailOnRead:     m.failOnRead,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		})
 	}
@@ -642,8 +648,8 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 			"fail_on_read": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
 				Optional:            true,
-				Description:         "If set, any resources with an ID in this list will fail during the read phase.",
-				MarkdownDescription: "If set, any resources with an ID in this list will fail during the read phase.",
+				Description:         "If set, any resources or data sources with an ID in this list will fail during the read phase. Under fail_once the two are separate one-shots: failing a data source read does not consume the strike a managed resource read of the same ID would.",
+				MarkdownDescription: "If set, any resources or data sources with an ID in this list will fail during the read phase. Under `fail_once` the two are separate one-shots: failing a data source read does not consume the strike a managed resource read of the same ID would.",
 			},
 			"fail_on_delete": provider_schema.ListAttribute{
 				ElementType:         types.StringType,

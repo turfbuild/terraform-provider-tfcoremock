@@ -22,6 +22,13 @@ type DataSource struct {
 	Name           string
 	InternalSchema schema.Schema
 	Client         client.Client
+
+	// FailOnRead and FailOnceDir are the managed resource's injection switches,
+	// carried here so a data-source read can be made to fail on demand. The
+	// strike key uses its own operation name, so failing a data read of an id
+	// never consumes the one-shot a managed read of the same id would use.
+	FailOnRead  []string
+	FailOnceDir string
 }
 
 func (d DataSource) Metadata(ctx context.Context, request datasource.MetadataRequest, response *datasource.MetadataResponse) {
@@ -42,6 +49,11 @@ func (d DataSource) Read(ctx context.Context, request datasource.ReadRequest, re
 
 	response.Diagnostics.Append(request.Config.Get(ctx, &resource)...)
 	if response.Diagnostics.HasError() {
+		return
+	}
+
+	if forcedFailure(d.FailOnRead, d.FailOnceDir, "read-data", resource.GetId()) {
+		response.Diagnostics.AddError("failed to read data source", "forced failure")
 		return
 	}
 
