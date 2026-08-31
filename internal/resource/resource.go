@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 
@@ -44,6 +46,13 @@ type Resource struct {
 	FailOnRead   []string
 	FailOnUpdate []string
 	DeferChanges []string
+
+	// FailOnceDir, when set, makes each FailOn* injection one-shot per
+	// operation and resource ID: the first triggered call records a strike
+	// file here and fails, and later calls for the same operation and ID
+	// succeed. On disk rather than in memory so a second provider process over
+	// the same store observes the strike. See forcedFailure.
+	FailOnceDir string
 
 	// IdentitySchemaVersion selects which version of the identity schema this
 	// resource declares. See IdentitySchema.
@@ -191,7 +200,7 @@ func (r Resource) Create(ctx context.Context, request resource.CreateRequest, re
 		return
 	}
 
-	if slices.Contains(r.FailOnCreate, resource.GetId()) {
+	if r.forcedFailure(r.FailOnCreate, "create", resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to create resource", "forced failure"))
 		return
 	}
@@ -223,7 +232,7 @@ func (r Resource) Read(ctx context.Context, request resource.ReadRequest, respon
 		return
 	}
 
-	if slices.Contains(r.FailOnRead, resource.GetId()) {
+	if r.forcedFailure(r.FailOnRead, "read", resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to read resource", "forced failure"))
 		return
 	}
@@ -285,7 +294,7 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 		return
 	}
 
-	if slices.Contains(r.FailOnUpdate, resource.GetId()) {
+	if r.forcedFailure(r.FailOnUpdate, "update", resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to update resource", "forced failure"))
 		return
 	}
@@ -299,6 +308,36 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 	response.Diagnostics.Append(response.Identity.Set(ctx, resource.Identity(r.IdentitySchemaVersion))...)
 	// A state-producing call returns the blob anew.
 	r.stampPrivateMarker(ctx, response.Private, resource.GetId(), &response.Diagnostics)
+}
+
+// forcedFailure reports whether a FailOn* injection should fire for this
+// operation and id. Without FailOnceDir the injection is static: every
+// triggered call fails. With it the injection is one-shot per (op, id): the
+// first triggered call records a strike file and fails, and later calls see
+// the strike and succeed — which is what lets a client exercise a
+// fail-then-retry-converges path against a deterministic provider. The strike
+// is a file so that a second provider process over the same resource
+// directory (a later plugin launch, or another tool applying the same
+// configuration) observes it; strike files live in their own subdirectory and
+// never appear as managed resources.
+func (r Resource) forcedFailure(list []string, op string, id string) bool {
+	if !slices.Contains(list, id) {
+		return false
+	}
+	if r.FailOnceDir == "" {
+		return true
+	}
+	strike := filepath.Join(r.FailOnceDir, fmt.Sprintf("%s-%s", op, url.PathEscape(id)))
+	if _, err := os.Stat(strike); err == nil {
+		return false
+	}
+	// Best-effort on purpose: if the strike cannot be recorded the injection
+	// simply keeps firing, which is the static behavior and loudly visible,
+	// where a swallowed failure-to-fail would be neither.
+	if err := os.MkdirAll(r.FailOnceDir, 0700); err == nil {
+		_ = os.WriteFile(strike, []byte(op+" "+id+"\n"), 0600)
+	}
+	return true
 }
 
 // writeOnlyNames returns the names of this resource's top-level write-only
@@ -400,7 +439,7 @@ func (r Resource) Delete(ctx context.Context, request resource.DeleteRequest, re
 		return
 	}
 
-	if slices.Contains(r.FailOnDelete, resource.GetId()) {
+	if r.forcedFailure(r.FailOnDelete, "delete", resource.GetId()) {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic("failed to delete resource", "forced failure"))
 		return
 	}

@@ -105,6 +105,13 @@ type tfcoremockProvider struct {
 	failOnOpen   []string
 	deferChanges []string
 
+	// failOnceDirectory is where one-shot failure strikes are recorded when
+	// fail_once is set; empty when the injections fail every call. Like
+	// ephemeralAuditDirectory it is derived from the resource directory — a
+	// strike must be observable from a second provider process, so it lives
+	// beside the store rather than in memory.
+	failOnceDirectory string
+
 	// ephemeralAuditDirectory is where the ephemeral resource records its
 	// lifecycle. It is derived from the resource directory rather than
 	// configured separately, and is empty under use_only_state — that mode has
@@ -125,6 +132,7 @@ type providerData struct {
 	DataDirectory     types.String `tfsdk:"data_directory"`
 	UseOnlyState      types.Bool   `tfsdk:"use_only_state"`
 
+	FailOnce     types.Bool `tfsdk:"fail_once"`
 	FailOnCreate types.List `tfsdk:"fail_on_create"`
 	FailOnUpdate types.List `tfsdk:"fail_on_update"`
 	FailOnRead   types.List `tfsdk:"fail_on_read"`
@@ -231,6 +239,24 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 		m.ephemeralAuditDirectory = filepath.Join(resourceDirectory, "ephemeral")
 	}
 
+	if data.FailOnce.ValueBool() {
+		if data.UseOnlyState.ValueBool() {
+			// The state client stores nothing, so a strike could only live in
+			// this process's memory — where a second plugin launch (or another
+			// tool over the same store) would never see it, and the "fails
+			// once" promise would silently become "fails once per process".
+			response.Diagnostics.AddError(
+				"fail_once requires a persistent store",
+				"fail_once records each strike beside the resource directory so a later call — "+
+					"from any process — sees it; with use_only_state there is nowhere to record. "+
+					"Unset use_only_state (and optionally set resource_directory) to use fail_once.")
+			return
+		}
+		// Same placement rule as the ephemeral audit directory: a subdirectory,
+		// because a strike record is not a managed resource.
+		m.failOnceDirectory = filepath.Join(m.client.(client.Local).ResourceDirectory, "fail-once")
+	}
+
 	failOnDelete, failOnDeleteDiags := parseStringList(ctx, data.FailOnDelete, "fail_on_delete")
 	failOnCreate, failOnCreateDiags := parseStringList(ctx, data.FailOnCreate, "fail_on_create")
 	failOnRead, failOnReadDiags := parseStringList(ctx, data.FailOnRead, "fail_on_read")
@@ -332,6 +358,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnCreate:   m.failOnCreate,
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
+				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
 
@@ -349,6 +376,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnCreate:   m.failOnCreate,
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
+				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
 
@@ -388,6 +416,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnCreate:   m.failOnCreate,
 				FailOnRead:     m.failOnRead,
 				FailOnUpdate:   m.failOnUpdate,
+				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
 				StrictIdentity: m.strictIdentity,
 
@@ -592,6 +621,11 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Description:         "If set to true the provider will rely only on the Terraform state file to load managed resources and will not write anything to disk. Defaults to `false`.",
 				MarkdownDescription: "If set to true the provider will rely only on the Terraform state file to load managed resources and will not write anything to disk. Defaults to `false`.",
 				Optional:            true,
+			},
+			"fail_once": provider_schema.BoolAttribute{
+				Optional:            true,
+				Description:         "If set to true, each fail_on_create/update/read/delete injection fires only once per operation and resource ID: the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
+				MarkdownDescription: "If set to true, each `fail_on_create`/`update`/`read`/`delete` injection fires only once per operation and resource ID: the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
 			},
 			"fail_on_create": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
