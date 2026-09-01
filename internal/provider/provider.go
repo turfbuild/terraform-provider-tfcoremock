@@ -105,6 +105,13 @@ type tfcoremockProvider struct {
 	failOnOpen   []string
 	deferChanges []string
 
+	// deferUntilReloadDirectory is where defer_changes marks are recorded when
+	// defer_until_reload is set; empty when the injection defers every call.
+	// Derived from the resource directory for the same reason failOnceDirectory
+	// is: the mark must be readable by a SECOND plugin process, which is the
+	// only thing that can clear it.
+	deferUntilReloadDirectory string
+
 	// failOnceDirectory is where one-shot failure strikes are recorded when
 	// fail_once is set; empty when the injections fail every call. Like
 	// ephemeralAuditDirectory it is derived from the resource directory — a
@@ -141,6 +148,13 @@ type providerData struct {
 	FailOnOpen   types.List `tfsdk:"fail_on_open"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
+
+	// DeferUntilReload makes a defer_changes injection clear on a PLUGIN
+	// RESTART instead of never: the id keeps deferring while this process
+	// answers, and stops the first time a different process is asked. It models
+	// a provider that caches what it discovered about the remote system outside
+	// the scope Configure rebuilds, so that only a fresh process looks again.
+	DeferUntilReload types.Bool `tfsdk:"defer_until_reload"`
 
 	// StrictIdentity turns the identity a client sends on the wire into an
 	// observable: when true, resources fail the call if the prior identity does
@@ -257,6 +271,22 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 		m.failOnceDirectory = filepath.Join(m.client.(client.Local).ResourceDirectory, "fail-once")
 	}
 
+	if data.DeferUntilReload.ValueBool() {
+		if data.UseOnlyState.ValueBool() {
+			// Same reason fail_once refuses it: a mark that lived only in this
+			// process's memory could never be read by the second process, so
+			// "until reload" would silently mean "forever".
+			response.Diagnostics.AddError(
+				"defer_until_reload requires a persistent store",
+				"defer_until_reload records each mark beside the resource directory so a SECOND "+
+					"plugin process can read it and stop deferring; with use_only_state there is "+
+					"nowhere to record. Unset use_only_state (and optionally set resource_directory) "+
+					"to use defer_until_reload.")
+			return
+		}
+		m.deferUntilReloadDirectory = filepath.Join(m.client.(client.Local).ResourceDirectory, "defer-until-reload")
+	}
+
 	failOnDelete, failOnDeleteDiags := parseStringList(ctx, data.FailOnDelete, "fail_on_delete")
 	failOnCreate, failOnCreateDiags := parseStringList(ctx, data.FailOnCreate, "fail_on_create")
 	failOnRead, failOnReadDiags := parseStringList(ctx, data.FailOnRead, "fail_on_read")
@@ -360,6 +390,9 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
+
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
+
 				StrictIdentity: m.strictIdentity,
 
 				StrictPrivateState: m.strictPrivateState,
@@ -378,6 +411,9 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
+
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
+
 				StrictIdentity: m.strictIdentity,
 
 				StrictPrivateState: m.strictPrivateState,
@@ -418,6 +454,9 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 				FailOnUpdate:   m.failOnUpdate,
 				FailOnceDir:    m.failOnceDirectory,
 				DeferChanges:   m.deferChanges,
+
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
+
 				StrictIdentity: m.strictIdentity,
 
 				StrictPrivateState: m.strictPrivateState,
@@ -674,6 +713,11 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
 				MarkdownDescription: "If set, any resources with an ID in this list will have any changes deferred during the plan phase.",
+			},
+			"defer_until_reload": provider_schema.BoolAttribute{
+				Optional:            true,
+				Description:         "If set to true, a defer_changes id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope Configure rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
+				MarkdownDescription: "If set to true, a `defer_changes` id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope `Configure` rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
 			},
 			"defer_on_unknown_config": provider_schema.BoolAttribute{
 				Optional:            true,

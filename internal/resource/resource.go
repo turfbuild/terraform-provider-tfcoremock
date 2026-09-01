@@ -5,6 +5,8 @@ package resource
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform-plugin-framework/resource/identityschema"
@@ -53,6 +56,13 @@ type Resource struct {
 	// succeed. On disk rather than in memory so a second provider process over
 	// the same store observes the strike. See forcedFailure.
 	FailOnceDir string
+
+	// DeferUntilReloadDir, when set, makes each DeferChanges injection clear on
+	// a PLUGIN RESTART rather than never: the id keeps deferring for as long as
+	// this provider process is the one answering, and stops the first time a
+	// different process is asked. Empty means the static behavior — the id
+	// defers every call, forever. See deferralFires.
+	DeferUntilReloadDir string
 
 	// IdentitySchemaVersion selects which version of the identity schema this
 	// resource declares. See IdentitySchema.
@@ -322,6 +332,55 @@ func (r Resource) Update(ctx context.Context, request resource.UpdateRequest, re
 // never appear as managed resources.
 func (r Resource) forcedFailure(list []string, op string, id string) bool {
 	return forcedFailure(list, r.FailOnceDir, op, id)
+}
+
+// processNonce identifies THIS plugin process. A restarted plugin — a new
+// process for the same binary and the same store — gets a different one, which
+// is the whole mechanism deferralFires keys on.
+var processNonce = func() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A pid is a weaker identity (it can be reused) but the only thing
+		// left; a constant here would make every process look like the same
+		// one, which is the failure that matters.
+		return fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	return hex.EncodeToString(b[:])
+}()
+
+// deferralFires reports whether a DeferChanges injection should fire for this
+// id. Without DeferUntilReloadDir the injection is static: the id defers every
+// call, forever, which is what a caller wants when it is testing that a
+// deferral is reported at all.
+//
+// With it, the injection models the thing real providers actually do: cache
+// what they discovered about the remote system somewhere their Configure call
+// does not rebuild, so that re-sending an identical configuration changes
+// nothing and only a fresh process looks again. (The kubernetes provider's API
+// discovery RESTMapper is the specimen — after a CRD is applied, the running
+// plugin still does not believe the new kind exists.) The mark records which
+// process deferred: this process reading its own mark keeps deferring, and a
+// different process reading it proceeds. A client that never recycles the
+// plugin therefore never converges, and one that recycles per phase does — the
+// difference being exactly what such a client needs to be able to prove.
+func (r Resource) deferralFires(id string) bool {
+	if !slices.Contains(r.DeferChanges, id) {
+		return false
+	}
+	if r.DeferUntilReloadDir == "" {
+		return true
+	}
+	mark := filepath.Join(r.DeferUntilReloadDir, url.PathEscape(id))
+	if b, err := os.ReadFile(mark); err == nil {
+		return strings.TrimSpace(string(b)) == processNonce
+	}
+	// Best-effort for the same reason forcedFailure's strike is: an unrecorded
+	// mark leaves the static behavior, which is loudly visible, where a
+	// swallowed failure-to-defer would not be.
+	if err := os.MkdirAll(r.DeferUntilReloadDir, 0700); err == nil {
+		_ = os.WriteFile(mark, []byte(processNonce+"\n"), 0600)
+	}
+	return true
 }
 
 // forcedFailure is the injection itself, free of the resource it fires on so
@@ -714,7 +773,7 @@ func (r Resource) ModifyPlan(ctx context.Context, request resource.ModifyPlanReq
 	}
 
 	id := res.GetId()
-	if slices.Contains(r.DeferChanges, id) {
+	if r.deferralFires(id) {
 		// Then we want to defer this change!
 
 		if !request.ClientCapabilities.DeferralAllowed {
