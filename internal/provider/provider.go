@@ -102,6 +102,7 @@ type tfcoremockProvider struct {
 	failOnRead   []string
 	failOnDelete []string
 	failOnInvoke []string
+	warnOnInvoke []string
 	failOnOpen   []string
 	deferChanges []string
 
@@ -145,6 +146,7 @@ type providerData struct {
 	FailOnRead   types.List `tfsdk:"fail_on_read"`
 	FailOnDelete types.List `tfsdk:"fail_on_delete"`
 	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
+	WarnOnInvoke types.List `tfsdk:"warn_on_invoke"`
 	FailOnOpen   types.List `tfsdk:"fail_on_open"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
@@ -292,6 +294,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	failOnRead, failOnReadDiags := parseStringList(ctx, data.FailOnRead, "fail_on_read")
 	failOnUpdate, failOnUpdateDiags := parseStringList(ctx, data.FailOnUpdate, "fail_on_update")
 	failOnInvoke, failOnInvokeDiags := parseStringList(ctx, data.FailOnInvoke, "fail_on_invoke")
+	warnOnInvoke, warnOnInvokeDiags := parseStringList(ctx, data.WarnOnInvoke, "warn_on_invoke")
 	failOnOpen, failOnOpenDiags := parseStringList(ctx, data.FailOnOpen, "fail_on_open")
 	deferChanges, deferChangesDiags := parseStringList(ctx, data.DeferChanges, "defer_changes")
 
@@ -300,6 +303,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	response.Diagnostics.Append(failOnReadDiags...)
 	response.Diagnostics.Append(failOnUpdateDiags...)
 	response.Diagnostics.Append(failOnInvokeDiags...)
+	response.Diagnostics.Append(warnOnInvokeDiags...)
 	response.Diagnostics.Append(failOnOpenDiags...)
 	response.Diagnostics.Append(deferChangesDiags...)
 
@@ -308,6 +312,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnRead = failOnRead
 	m.failOnUpdate = failOnUpdate
 	m.failOnInvoke = failOnInvoke
+	m.warnOnInvoke = warnOnInvoke
 	m.failOnOpen = failOnOpen
 	m.deferChanges = deferChanges
 	m.strictIdentity = data.StrictIdentity.ValueBool()
@@ -532,6 +537,8 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				Name:           "tfcoremock_complex_resource",
 				InternalSchema: complex.Schema(3),
 				FailOnInvoke:   m.failOnInvoke,
+				WarnOnInvoke:   m.warnOnInvoke,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
 		func() action.Action {
@@ -539,6 +546,8 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				Name:           "tfcoremock_simple_resource",
 				InternalSchema: simple.Schema,
 				FailOnInvoke:   m.failOnInvoke,
+				WarnOnInvoke:   m.warnOnInvoke,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
 	}
@@ -568,6 +577,8 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				Name:           actionName,
 				InternalSchema: actionSchema,
 				FailOnInvoke:   m.failOnInvoke,
+				WarnOnInvoke:   m.warnOnInvoke,
+				FailOnceDir:    m.failOnceDirectory,
 			}
 		})
 	}
@@ -669,8 +680,8 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 			},
 			"fail_once": provider_schema.BoolAttribute{
 				Optional:            true,
-				Description:         "If set to true, each fail_on_create/update/read/delete injection fires only once per operation and resource ID: the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
-				MarkdownDescription: "If set to true, each `fail_on_create`/`update`/`read`/`delete` injection fires only once per operation and resource ID: the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
+				Description:         "If set to true, each fail_on_create/update/read/delete/invoke injection fires only once per operation and resource ID (for an action, per config `string` value): the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
+				MarkdownDescription: "If set to true, each `fail_on_create`/`update`/`read`/`delete`/`invoke` injection fires only once per operation and resource ID (for an action, per config `string` value): the first triggered call fails and records a strike under a `fail-once` subdirectory of the resource directory, and later calls for the same operation and ID succeed. Because the strike is recorded on disk, a second provider process over the same resource directory observes it. Requires the resource directory; incompatible with `use_only_state`. Defaults to `false`.",
 			},
 			"fail_on_create": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
@@ -701,6 +712,12 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any action whose config `string` attribute is in this list will fail when invoked.",
 				MarkdownDescription: "If set, any action whose config `string` attribute is in this list will fail when invoked.",
+			},
+			"warn_on_invoke": provider_schema.ListAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Description:         "If set, any action whose config `string` attribute is in this list returns a warning diagnostic when invoked. The invocation still succeeds unless the value is also in fail_on_invoke, in which case it fails and still returns the warning.",
+				MarkdownDescription: "If set, any action whose config `string` attribute is in this list returns a warning diagnostic when invoked. The invocation still succeeds unless the value is also in `fail_on_invoke`, in which case it fails and still returns the warning.",
 			},
 			"fail_on_open": provider_schema.ListAttribute{
 				ElementType:         types.StringType,

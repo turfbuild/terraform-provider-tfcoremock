@@ -26,6 +26,18 @@ type Action struct {
 	// resource schema forbids one), so the freely-settable `string` attribute is
 	// the selector.
 	FailOnInvoke []string
+
+	// WarnOnInvoke lists `string` config values that, when matched, make the
+	// invocation succeed with a warning diagnostic beside its progress event —
+	// for exercising how a client carries a provider's warnings (a real
+	// provider warns on a pass it cannot fully vouch for). Checked after
+	// FailOnInvoke, so a value in both lists fails and still warns.
+	WarnOnInvoke []string
+
+	// FailOnceDir, when set, makes FailOnInvoke one-shot per config `string`,
+	// exactly as it does for the resource injections: the first triggered
+	// invocation fails and records a strike, later ones succeed.
+	FailOnceDir string
 }
 
 func (a Action) Metadata(ctx context.Context, request action.MetadataRequest, response *action.MetadataResponse) {
@@ -46,10 +58,27 @@ func (a Action) Invoke(ctx context.Context, request action.InvokeRequest, respon
 		return
 	}
 
-	if v, ok := resource.Values["string"]; ok && v.String != nil && slices.Contains(a.FailOnInvoke, *v.String) {
+	var selector string
+	v, selected := resource.Values["string"]
+	if selected && v.String != nil {
+		selector = *v.String
+	} else {
+		selected = false
+	}
+
+	// The warning is added first so that a value in both lists reports it
+	// beside the error: a client must carry a provider's warnings whether or
+	// not the invocation failed.
+	if selected && slices.Contains(a.WarnOnInvoke, selector) {
+		response.Diagnostics.AddWarning(
+			"action invocation warned",
+			fmt.Sprintf("the action with string=%q is configured to warn via warn_on_invoke", selector))
+	}
+
+	if selected && forcedFailure(a.FailOnInvoke, a.FailOnceDir, "invoke", selector) {
 		response.Diagnostics.AddError(
 			"action invocation failed",
-			fmt.Sprintf("the action with string=%q is configured to fail via fail_on_invoke", *v.String))
+			fmt.Sprintf("the action with string=%q is configured to fail via fail_on_invoke", selector))
 		return
 	}
 

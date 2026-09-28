@@ -73,3 +73,29 @@ func TestForcedFailureDataSourceIsItsOwnOperation(t *testing.T) {
 		t.Fatal("the managed read still has its own first failure to spend")
 	}
 }
+
+// TestForcedFailureInvokeIsItsOwnOperation proves fail_once reaches actions:
+// the invoke injection keys its strike by the config `string` under its own
+// operation name, so it neither spends nor is spent by a resource injection of
+// the same spelling.
+func TestForcedFailureInvokeIsItsOwnOperation(t *testing.T) {
+	dir := t.TempDir()
+	a := Action{FailOnInvoke: []string{"shared"}, FailOnceDir: dir}
+	r := Resource{FailOnCreate: []string{"shared"}, FailOnceDir: dir}
+
+	if !forcedFailure(a.FailOnInvoke, a.FailOnceDir, "invoke", "shared") {
+		t.Fatal("the invocation's first triggered call must fail")
+	}
+	if forcedFailure(a.FailOnInvoke, a.FailOnceDir, "invoke", "shared") {
+		t.Fatal("the invocation's second call must see the strike and succeed")
+	}
+	if !r.forcedFailure(r.FailOnCreate, "create", "shared") {
+		t.Fatal("the create still has its own first failure to spend")
+	}
+	static := Action{FailOnInvoke: []string{"shared"}}
+	for i := 0; i < 2; i++ {
+		if !forcedFailure(static.FailOnInvoke, static.FailOnceDir, "invoke", "shared") {
+			t.Fatalf("call %d: without fail_once a listed value must fail every invocation", i+1)
+		}
+	}
+}
