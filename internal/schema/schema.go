@@ -135,3 +135,64 @@ func (schema Schema) validateAttributes() error {
 	}
 	return nil
 }
+
+// WithoutNestedAttributes returns a copy of the schema in which every list,
+// map, set and object attribute — at any depth, inside blocks too — is built
+// as a plain collection or object type rather than as a nested attribute.
+//
+// Plugin protocol 5 cannot express nested attributes: the framework refuses
+// the whole provider schema if one is present. So a provider served over
+// protocol 5 hands out this form. The cost is the one skip_nested_metadata
+// always carried: an object's attributes are all required in configuration,
+// as a plain object type's are.
+func (schema Schema) WithoutNestedAttributes() Schema {
+	out := schema
+	out.Attributes = attributesWithoutNesting(schema.Attributes)
+	out.Blocks = blocksWithoutNesting(schema.Blocks)
+	return out
+}
+
+func attributesWithoutNesting(attributes map[string]Attribute) map[string]Attribute {
+	if attributes == nil {
+		return nil
+	}
+	out := make(map[string]Attribute, len(attributes))
+	for name, attribute := range attributes {
+		out[name] = attribute.withoutNesting()
+	}
+	return out
+}
+
+func blocksWithoutNesting(blocks map[string]Block) map[string]Block {
+	if blocks == nil {
+		return nil
+	}
+	out := make(map[string]Block, len(blocks))
+	for name, block := range blocks {
+		block.Attributes = attributesWithoutNesting(block.Attributes)
+		block.Blocks = blocksWithoutNesting(block.Blocks)
+		out[name] = block
+	}
+	return out
+}
+
+func (a Attribute) withoutNesting() Attribute {
+	switch a.Type {
+	case List, Map, Set, Object:
+		a.SkipNestedMetadata = true
+	}
+	if a.List != nil {
+		elem := a.List.withoutNesting()
+		a.List = &elem
+	}
+	if a.Map != nil {
+		elem := a.Map.withoutNesting()
+		a.Map = &elem
+	}
+	if a.Set != nil {
+		elem := a.Set.withoutNesting()
+		a.Set = &elem
+	}
+	a.Object = attributesWithoutNesting(a.Object)
+	return a
+}

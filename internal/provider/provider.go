@@ -24,7 +24,9 @@ import (
 
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/client"
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/resource"
+	"github.com/hashicorp/terraform-provider-tfcoremock/internal/schema"
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/schema/complex"
+	"github.com/hashicorp/terraform-provider-tfcoremock/internal/schema/cwdfile"
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/schema/dynamic"
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/schema/simple"
 )
@@ -88,6 +90,11 @@ type tfcoremockProvider struct {
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
 	version string
+
+	// protocol is the plugin protocol major version the provider is served
+	// over (see ProtocolFromEnv). Under 5 every schema is handed out without
+	// nested attributes, which that protocol cannot express.
+	protocol int
 
 	// reader will read the dynamic resource definitions in the GetResource and
 	// GetDataSources functions.
@@ -387,7 +394,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 		func() tfresource.Resource {
 			return resource.Resource{
 				Name:           "tfcoremock_complex_resource",
-				InternalSchema: complex.Schema(3),
+				InternalSchema: m.served(complex.Schema(3)),
 				Client:         m.client,
 				FailOnDelete:   m.failOnDelete,
 				FailOnCreate:   m.failOnCreate,
@@ -408,7 +415,28 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 		func() tfresource.Resource {
 			return resource.Resource{
 				Name:           "tfcoremock_simple_resource",
-				InternalSchema: simple.Schema,
+				InternalSchema: m.served(simple.Schema),
+				Client:         m.client,
+				FailOnDelete:   m.failOnDelete,
+				FailOnCreate:   m.failOnCreate,
+				FailOnRead:     m.failOnRead,
+				FailOnUpdate:   m.failOnUpdate,
+				FailOnceDir:    m.failOnceDirectory,
+				DeferChanges:   m.deferChanges,
+
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
+
+				StrictIdentity: m.strictIdentity,
+
+				StrictPrivateState: m.strictPrivateState,
+
+				IdentitySchemaVersion: m.identitySchemaVersion,
+			}
+		},
+		func() tfresource.Resource {
+			return resource.Resource{
+				Name:           "tfcoremock_cwd_file",
+				InternalSchema: m.served(cwdfile.Schema),
 				Client:         m.client,
 				FailOnDelete:   m.failOnDelete,
 				FailOnCreate:   m.failOnCreate,
@@ -451,7 +479,7 @@ func (m *tfcoremockProvider) Resources(ctx context.Context) []func() tfresource.
 		resources = append(resources, func() tfresource.Resource {
 			return resource.Resource{
 				Name:           resourceName,
-				InternalSchema: resourceSchema,
+				InternalSchema: m.served(resourceSchema),
 				Client:         m.client,
 				FailOnDelete:   m.failOnDelete,
 				FailOnCreate:   m.failOnCreate,
@@ -479,7 +507,7 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 		func() datasource.DataSource {
 			return resource.DataSource{
 				Name:           "tfcoremock_complex_resource",
-				InternalSchema: complex.Schema(3),
+				InternalSchema: m.served(complex.Schema(3)),
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
@@ -488,7 +516,7 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 		func() datasource.DataSource {
 			return resource.DataSource{
 				Name:           "tfcoremock_simple_resource",
-				InternalSchema: simple.Schema,
+				InternalSchema: m.served(simple.Schema),
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
@@ -519,7 +547,7 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 		datasources = append(datasources, func() datasource.DataSource {
 			return resource.DataSource{
 				Name:           datasourceName,
-				InternalSchema: datasourceSchema,
+				InternalSchema: m.served(datasourceSchema),
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
@@ -535,7 +563,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 		func() action.Action {
 			return resource.Action{
 				Name:           "tfcoremock_complex_resource",
-				InternalSchema: complex.Schema(3),
+				InternalSchema: m.served(complex.Schema(3)),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
 				FailOnceDir:    m.failOnceDirectory,
@@ -544,7 +572,16 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 		func() action.Action {
 			return resource.Action{
 				Name:           "tfcoremock_simple_resource",
-				InternalSchema: simple.Schema,
+				InternalSchema: m.served(simple.Schema),
+				FailOnInvoke:   m.failOnInvoke,
+				WarnOnInvoke:   m.warnOnInvoke,
+				FailOnceDir:    m.failOnceDirectory,
+			}
+		},
+		func() action.Action {
+			return resource.Action{
+				Name:           "tfcoremock_cwd_file",
+				InternalSchema: m.served(cwdfile.Schema),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
 				FailOnceDir:    m.failOnceDirectory,
@@ -575,7 +612,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 		actions = append(actions, func() action.Action {
 			return resource.Action{
 				Name:           actionName,
-				InternalSchema: actionSchema,
+				InternalSchema: m.served(actionSchema),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
 				FailOnceDir:    m.failOnceDirectory,
@@ -610,7 +647,7 @@ func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.Li
 		func() list.ListResource {
 			return resource.ListResource{
 				Name:                  "tfcoremock_complex_resource",
-				InternalSchema:        complex.Schema(3),
+				InternalSchema:        m.served(complex.Schema(3)),
 				Client:                m.client,
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
@@ -618,7 +655,7 @@ func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.Li
 		func() list.ListResource {
 			return resource.ListResource{
 				Name:                  "tfcoremock_simple_resource",
-				InternalSchema:        simple.Schema,
+				InternalSchema:        m.served(simple.Schema),
 				Client:                m.client,
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
@@ -648,7 +685,7 @@ func (m *tfcoremockProvider) ListResources(ctx context.Context) []func() list.Li
 		listResources = append(listResources, func() list.ListResource {
 			return resource.ListResource{
 				Name:                  listResourceName,
-				InternalSchema:        listResourceSchema,
+				InternalSchema:        m.served(listResourceSchema),
 				Client:                m.client,
 				IdentitySchemaVersion: m.identitySchemaVersion,
 			}
@@ -799,7 +836,23 @@ func identitySchemaVersionFromEnv() int64 {
 	return version
 }
 
+// served is the form of a schema this provider hands out: the schema itself
+// over protocol 6, and over protocol 5 the same schema with every nested
+// attribute built as a plain collection or object type.
+func (m *tfcoremockProvider) served(s schema.Schema) schema.Schema {
+	if m.protocol == 5 {
+		return s.WithoutNestedAttributes()
+	}
+	return s
+}
+
 func New(version string) func() provider.Provider {
+	return NewWithProtocol(version, 6)
+}
+
+// NewWithProtocol is New for a provider served over the given plugin protocol
+// major version (5 or 6); the caller serves it over that protocol.
+func NewWithProtocol(version string, protocol int) func() provider.Provider {
 	return func() provider.Provider {
 		dynamicResourcesPath := "dynamic_resources.json"
 		if dynamicResourcesPathEnvVar := os.Getenv(dynamicResourcesPathEnvVarName); len(dynamicResourcesPathEnvVar) > 0 {
@@ -808,6 +861,7 @@ func New(version string) func() provider.Provider {
 
 		return &tfcoremockProvider{
 			version:               version,
+			protocol:              protocol,
 			reader:                dynamic.FileReader{File: dynamicResourcesPath},
 			identitySchemaVersion: identitySchemaVersionFromEnv(),
 		}
@@ -815,9 +869,16 @@ func New(version string) func() provider.Provider {
 }
 
 func NewForTesting(version string, resources string) func() provider.Provider {
+	return NewForTestingWithProtocol(version, resources, 6)
+}
+
+// NewForTestingWithProtocol is NewForTesting for a provider served over the
+// given plugin protocol major version.
+func NewForTestingWithProtocol(version string, resources string, protocol int) func() provider.Provider {
 	return func() provider.Provider {
 		return &tfcoremockProvider{
 			version:               version,
+			protocol:              protocol,
 			reader:                dynamic.StringReader{Data: resources},
 			identitySchemaVersion: identitySchemaVersionFromEnv(),
 		}

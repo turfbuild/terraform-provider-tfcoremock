@@ -14,6 +14,7 @@ import (
 )
 
 var _ action.Action = Action{}
+var _ action.ActionWithValidateConfig = Action{}
 
 type Action struct {
 	Name           string
@@ -49,6 +50,12 @@ func (a Action) Schema(ctx context.Context, request action.SchemaRequest, respon
 	if response.Schema, err = a.InternalSchema.ToTerraformActionSchema(); err != nil {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic(fmt.Sprintf("failed to build resource schema for '%s'", a.Name), err.Error()))
 	}
+}
+
+// ValidateConfig checks the files the schema's MustExist attributes name; for
+// a schema without any it does nothing.
+func (a Action) ValidateConfig(ctx context.Context, request action.ValidateConfigRequest, response *action.ValidateConfigResponse) {
+	validateMustExist(ctx, a.InternalSchema, request.Config, &response.Diagnostics)
 }
 
 func (a Action) Invoke(ctx context.Context, request action.InvokeRequest, response *action.InvokeResponse) {

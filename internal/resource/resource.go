@@ -38,6 +38,7 @@ var _ resource.ResourceWithIdentity = Resource{}
 var _ resource.ResourceWithImportState = Resource{}
 var _ resource.ResourceWithModifyPlan = Resource{}
 var _ resource.ResourceWithUpgradeIdentity = Resource{}
+var _ resource.ResourceWithValidateConfig = Resource{}
 
 type Resource struct {
 	Name           string
@@ -93,6 +94,12 @@ func (r Resource) Schema(ctx context.Context, request resource.SchemaRequest, re
 	if response.Schema, err = r.InternalSchema.ToTerraformResourceSchema(); err != nil {
 		response.Diagnostics.Append(diag.NewErrorDiagnostic(fmt.Sprintf("failed to build resource schema for '%s'", r.Name), err.Error()))
 	}
+}
+
+// ValidateConfig checks the files the schema's MustExist attributes name; for
+// a schema without any it does nothing.
+func (r Resource) ValidateConfig(ctx context.Context, request resource.ValidateConfigRequest, response *resource.ValidateConfigResponse) {
+	validateMustExist(ctx, r.InternalSchema, request.Config, &response.Diagnostics)
 }
 
 // IdentitySchema describes the resource's identity at the version this provider

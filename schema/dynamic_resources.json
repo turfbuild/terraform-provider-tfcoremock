@@ -16,6 +16,7 @@
         "sensitive": { "type": "boolean" },
         "replace": { "type": "boolean" },
         "skip_nested_metadata": { "type": "boolean" },
+        "must_exist": { "type": "boolean" },
         "value": { "$ref":  "#/definitions/value" },
         "list": { "$ref": "#/definitions/attribute" },
         "map": { "$ref": "#/definitions/attribute" },

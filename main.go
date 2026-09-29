@@ -38,12 +38,18 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/hashicorp/tfcoremock",
-		Debug:   debug,
+	protocol, err := provider.ProtocolFromEnv()
+	if err != nil {
+		log.Fatal(err.Error())
 	}
 
-	err := providerserver.Serve(context.Background(), provider.New(version), opts)
+	opts := providerserver.ServeOpts{
+		Address:         "registry.terraform.io/hashicorp/tfcoremock",
+		Debug:           debug,
+		ProtocolVersion: protocol,
+	}
+
+	err = providerserver.Serve(context.Background(), provider.NewWithProtocol(version, protocol), opts)
 
 	if err != nil {
 		log.Fatal(err.Error())

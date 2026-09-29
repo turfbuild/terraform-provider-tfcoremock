@@ -99,3 +99,35 @@ func TestAccSimpleActionFailsOnceOnInvoke(t *testing.T) {
 		},
 	})
 }
+
+// TestAccActionsProtocol5 runs the action configurations above with the
+// provider served over plugin protocol 5: the same outcomes, since nothing an
+// action does is protocol-specific once the schema can be expressed.
+func TestAccActionsProtocol5(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		config    string
+		resources string
+		errs      []*regexp.Regexp // one per step; nil = the step succeeds
+	}{
+		{name: "simple", config: LoadFile(t, "testdata/actions/simple.tf"), errs: []*regexp.Regexp{nil}},
+		{name: "dynamic", config: LoadFile(t, "testdata/actions/dynamic.tf"), resources: LoadFile(t, "testdata/actions/dynamic_resources.json"), errs: []*regexp.Regexp{nil}},
+		{name: "warn", config: LoadFile(t, "testdata/actions/warn.tf"), errs: []*regexp.Regexp{nil}},
+		{name: "fail", config: LoadFile(t, "testdata/actions/fail.tf"), errs: []*regexp.Regexp{regexp.MustCompile("action invocation failed")}},
+		{name: "fail_once", config: fmt.Sprintf(LoadFile(t, "testdata/actions/fail_once.tf"), t.TempDir()), errs: []*regexp.Regexp{regexp.MustCompile("action invocation failed"), nil}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps := make([]resource.TestStep, len(tc.errs))
+			for i, want := range tc.errs {
+				steps[i] = resource.TestStep{Config: tc.config, ExpectError: want}
+			}
+			resource.Test(t, resource.TestCase{
+				ProtoV5ProviderFactories: ProviderFactories5(tc.resources),
+				TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+					tfversion.SkipBelow(version.Must(version.NewVersion("1.14.0-beta1"))),
+				},
+				Steps: steps,
+			})
+		})
+	}
+}

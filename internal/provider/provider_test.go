@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
@@ -69,5 +70,14 @@ func CheckResourceIdChanged(name string, id *string) resource.TestCheckFunc {
 			return errors.New("id value for " + name + " has not changed")
 		}
 		return nil
+	}
+}
+
+// ProviderFactories5 is ProviderFactories for the provider served over plugin
+// protocol 5, as TFCOREMOCK_PROTOCOL=5 serves the binary.
+func ProviderFactories5(resources string) map[string]func() (tfprotov5.ProviderServer, error) {
+	provider := NewForTestingWithProtocol("test", resources, 5)()
+	return map[string]func() (tfprotov5.ProviderServer, error){
+		"tfcoremock": providerserver.NewProtocol5WithError(provider),
 	}
 }

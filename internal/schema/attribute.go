@@ -61,6 +61,16 @@ type Attribute struct {
 	// attribute field when building element and attribute types of complex
 	// attributes (list, map, object, and set).
 	SkipNestedMetadata bool `json:"skip_nested_metadata"`
+
+	// MustExist makes a top-level string attribute name a file that must
+	// exist when the configuration is validated. A relative path is resolved
+	// against the provider's working directory, which is the point: a client
+	// that launches the plugin somewhere other than the configuration's
+	// directory fails validation here exactly as a real provider reading its
+	// playbooks or key files from a relative path would. Unknown and null
+	// values are not checked. Resources and actions honour it; data source
+	// attributes are all computed, so there is nothing to check there.
+	MustExist bool `json:"must_exist"`
 }
 
 // AttributeTypes contains functions that map provider attributes into Terraform
