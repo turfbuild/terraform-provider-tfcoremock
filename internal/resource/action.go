@@ -15,6 +15,7 @@ import (
 
 var _ action.Action = Action{}
 var _ action.ActionWithValidateConfig = Action{}
+var _ action.ActionWithModifyPlan = Action{}
 
 type Action struct {
 	Name           string
@@ -34,6 +35,13 @@ type Action struct {
 	// provider warns on a pass it cannot fully vouch for). Checked after
 	// FailOnInvoke, so a value in both lists fails and still warns.
 	WarnOnInvoke []string
+
+	// DeferOnAction lists `string` config values whose PlanAction answers with
+	// a deferral — the action analog of DeferChanges — for exercising what a
+	// client does with an invocation the provider cannot plan yet. A client
+	// that does not allow deferrals gets an error instead, as a resource's
+	// deferral does.
+	DeferOnAction []string
 
 	// FailOnceDir, when set, makes FailOnInvoke one-shot per config `string`,
 	// exactly as it does for the resource injections: the first triggered
@@ -56,6 +64,32 @@ func (a Action) Schema(ctx context.Context, request action.SchemaRequest, respon
 // a schema without any it does nothing.
 func (a Action) ValidateConfig(ctx context.Context, request action.ValidateConfigRequest, response *action.ValidateConfigResponse) {
 	validateMustExist(ctx, a.InternalSchema, request.Config, &response.Diagnostics)
+}
+
+// ModifyPlan defers the plan of an action whose config `string` is in
+// DeferOnAction; every other action plans as the framework's default does.
+func (a Action) ModifyPlan(ctx context.Context, request action.ModifyPlanRequest, response *action.ModifyPlanResponse) {
+	if len(a.DeferOnAction) == 0 || request.Config.Raw.IsNull() {
+		return
+	}
+	resource := &data.Resource{}
+	response.Diagnostics.Append(request.Config.Get(ctx, &resource)...)
+	if response.Diagnostics.HasError() {
+		return
+	}
+	v, ok := resource.Values["string"]
+	if !ok || v.String == nil || !slices.Contains(a.DeferOnAction, *v.String) {
+		return
+	}
+	if !request.ClientCapabilities.DeferralAllowed {
+		response.Diagnostics.AddError("Invalid action deferral",
+			fmt.Sprintf("The action with string=%q is marked \"should be deferred\" via defer_on_action, but the client does not support deferrals.", *v.String))
+		return
+	}
+	// The one reason Terraform admits for an action ("An action can only be
+	// deferred due to an unknown provider configuration", its experimental
+	// build says of any other).
+	response.Deferred = &action.Deferred{Reason: action.DeferredReasonProviderConfigUnknown}
 }
 
 func (a Action) Invoke(ctx context.Context, request action.InvokeRequest, response *action.InvokeResponse) {

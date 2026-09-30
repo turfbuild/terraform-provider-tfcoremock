@@ -100,6 +100,25 @@ func TestAccSimpleActionFailsOnceOnInvoke(t *testing.T) {
 	})
 }
 
+// TestAccSimpleActionDeferRefused proves defer_on_action reaches PlanAction: a
+// stable Terraform allows no deferrals, so the listed action fails to plan
+// rather than being planned as if nothing were marked.
+func TestAccSimpleActionDeferRefused(t *testing.T) {
+	t.Cleanup(CleanupTestingDirectories(t))
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: ProviderFactories(""),
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipBelow(version.Must(version.NewVersion("1.14.0-beta1"))),
+		},
+		Steps: []resource.TestStep{
+			{
+				Config:      LoadFile(t, "testdata/actions/defer.tf"),
+				ExpectError: regexp.MustCompile("Invalid action deferral"),
+			},
+		},
+	})
+}
+
 // TestAccActionsProtocol5 runs the action configurations above with the
 // provider served over plugin protocol 5: the same outcomes, since nothing an
 // action does is protocol-specific once the schema can be expressed.
@@ -114,6 +133,7 @@ func TestAccActionsProtocol5(t *testing.T) {
 		{name: "dynamic", config: LoadFile(t, "testdata/actions/dynamic.tf"), resources: LoadFile(t, "testdata/actions/dynamic_resources.json"), errs: []*regexp.Regexp{nil}},
 		{name: "warn", config: LoadFile(t, "testdata/actions/warn.tf"), errs: []*regexp.Regexp{nil}},
 		{name: "fail", config: LoadFile(t, "testdata/actions/fail.tf"), errs: []*regexp.Regexp{regexp.MustCompile("action invocation failed")}},
+		{name: "defer", config: LoadFile(t, "testdata/actions/defer.tf"), errs: []*regexp.Regexp{regexp.MustCompile("Invalid action deferral")}},
 		{name: "fail_once", config: fmt.Sprintf(LoadFile(t, "testdata/actions/fail_once.tf"), t.TempDir()), errs: []*regexp.Regexp{regexp.MustCompile("action invocation failed"), nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

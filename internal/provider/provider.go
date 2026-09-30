@@ -110,6 +110,7 @@ type tfcoremockProvider struct {
 	failOnDelete []string
 	failOnInvoke []string
 	warnOnInvoke []string
+	deferAction  []string
 	failOnOpen   []string
 	deferChanges []string
 
@@ -155,6 +156,11 @@ type providerData struct {
 	FailOnInvoke types.List `tfsdk:"fail_on_invoke"`
 	WarnOnInvoke types.List `tfsdk:"warn_on_invoke"`
 	FailOnOpen   types.List `tfsdk:"fail_on_open"`
+
+	// DeferOnAction lists action config `string` values whose plan is
+	// deferred: the action analog of defer_changes, for exercising what a
+	// client does with an invocation the provider cannot plan yet.
+	DeferOnAction types.List `tfsdk:"defer_on_action"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
 
@@ -302,6 +308,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	failOnUpdate, failOnUpdateDiags := parseStringList(ctx, data.FailOnUpdate, "fail_on_update")
 	failOnInvoke, failOnInvokeDiags := parseStringList(ctx, data.FailOnInvoke, "fail_on_invoke")
 	warnOnInvoke, warnOnInvokeDiags := parseStringList(ctx, data.WarnOnInvoke, "warn_on_invoke")
+	deferAction, deferActionDiags := parseStringList(ctx, data.DeferOnAction, "defer_on_action")
 	failOnOpen, failOnOpenDiags := parseStringList(ctx, data.FailOnOpen, "fail_on_open")
 	deferChanges, deferChangesDiags := parseStringList(ctx, data.DeferChanges, "defer_changes")
 
@@ -311,6 +318,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	response.Diagnostics.Append(failOnUpdateDiags...)
 	response.Diagnostics.Append(failOnInvokeDiags...)
 	response.Diagnostics.Append(warnOnInvokeDiags...)
+	response.Diagnostics.Append(deferActionDiags...)
 	response.Diagnostics.Append(failOnOpenDiags...)
 	response.Diagnostics.Append(deferChangesDiags...)
 
@@ -320,6 +328,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnUpdate = failOnUpdate
 	m.failOnInvoke = failOnInvoke
 	m.warnOnInvoke = warnOnInvoke
+	m.deferAction = deferAction
 	m.failOnOpen = failOnOpen
 	m.deferChanges = deferChanges
 	m.strictIdentity = data.StrictIdentity.ValueBool()
@@ -566,6 +575,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				InternalSchema: m.served(complex.Schema(3)),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
+				DeferOnAction:  m.deferAction,
 				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
@@ -575,6 +585,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				InternalSchema: m.served(simple.Schema),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
+				DeferOnAction:  m.deferAction,
 				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
@@ -584,6 +595,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				InternalSchema: m.served(cwdfile.Schema),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
+				DeferOnAction:  m.deferAction,
 				FailOnceDir:    m.failOnceDirectory,
 			}
 		},
@@ -615,6 +627,7 @@ func (m *tfcoremockProvider) Actions(ctx context.Context) []func() action.Action
 				InternalSchema: m.served(actionSchema),
 				FailOnInvoke:   m.failOnInvoke,
 				WarnOnInvoke:   m.warnOnInvoke,
+				DeferOnAction:  m.deferAction,
 				FailOnceDir:    m.failOnceDirectory,
 			}
 		})
@@ -755,6 +768,12 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Optional:            true,
 				Description:         "If set, any action whose config `string` attribute is in this list returns a warning diagnostic when invoked. The invocation still succeeds unless the value is also in fail_on_invoke, in which case it fails and still returns the warning.",
 				MarkdownDescription: "If set, any action whose config `string` attribute is in this list returns a warning diagnostic when invoked. The invocation still succeeds unless the value is also in `fail_on_invoke`, in which case it fails and still returns the warning.",
+			},
+			"defer_on_action": provider_schema.ListAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Description:         "If set, any action whose config `string` attribute is in this list has its plan deferred, when the client allows deferrals, and fails to plan when it does not.",
+				MarkdownDescription: "If set, any action whose config `string` attribute is in this list has its plan deferred, when the client allows deferrals, and fails to plan when it does not.",
 			},
 			"fail_on_open": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
