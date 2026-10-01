@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 
 	"github.com/hashicorp/terraform-provider-tfcoremock/internal/client"
@@ -29,6 +30,13 @@ type DataSource struct {
 	// never consumes the one-shot a managed read of the same id would use.
 	FailOnRead  []string
 	FailOnceDir string
+
+	// DeferOnRead lists ids whose read is deferred rather than performed, the
+	// data-source analog of the managed resource's DeferChanges, and
+	// DeferUntilReloadDir clears it on a plugin restart exactly as it clears
+	// that one. See Read.
+	DeferOnRead         []string
+	DeferUntilReloadDir string
 }
 
 func (d DataSource) Metadata(ctx context.Context, request datasource.MetadataRequest, response *datasource.MetadataResponse) {
@@ -49,6 +57,25 @@ func (d DataSource) Read(ctx context.Context, request datasource.ReadRequest, re
 
 	response.Diagnostics.Append(request.Config.Get(ctx, &resource)...)
 	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// The deferral a terraform-plugin-sdk provider configured with unknown
+	// values gives a read (the kubernetes provider's data sources, whose
+	// cluster address is not known yet): PROVIDER_CONFIG_UNKNOWN, with the
+	// state wholly unknown as the framework's own provider-level deferral
+	// sends it. The framework checks the client's capability only at
+	// Configure, so the check is made here: a client that does not allow
+	// deferrals fails the read, as a resource's deferral does, instead of
+	// receiving an answer it never asked to handle.
+	if deferralFires(d.DeferOnRead, d.DeferUntilReloadDir, "read-data", resource.GetId()) {
+		if !request.ClientCapabilities.DeferralAllowed {
+			response.Diagnostics.AddAttributeError(path.Root("id"), "Invalid data source deferral",
+				fmt.Sprintf("The data source with id=%q is marked \"should be deferred\" via defer_on_read, but the client does not support deferrals.", resource.GetId()))
+			return
+		}
+		response.State.Raw = tftypes.NewValue(request.Config.Schema.Type().TerraformType(ctx), tftypes.UnknownValue)
+		response.Deferred = &datasource.Deferred{Reason: datasource.DeferredReasonProviderConfigUnknown}
 		return
 	}
 

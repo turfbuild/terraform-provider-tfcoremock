@@ -371,20 +371,33 @@ var processNonce = func() string {
 // plugin therefore never converges, and one that recycles per phase does — the
 // difference being exactly what such a client needs to be able to prove.
 func (r Resource) deferralFires(id string) bool {
-	if !slices.Contains(r.DeferChanges, id) {
+	return deferralFires(r.DeferChanges, r.DeferUntilReloadDir, "", id)
+}
+
+// deferralFires is the deferral injection free of what it fires on, so the
+// data source shares it the way it shares forcedFailure. The op string is part
+// of the mark's name, as it is of a strike's, so a data source deferring an id
+// never answers for a managed resource deferring the same one; the managed
+// resource's op is empty, which keeps its marks where they always were.
+func deferralFires(list []string, dir, op, id string) bool {
+	if !slices.Contains(list, id) {
 		return false
 	}
-	if r.DeferUntilReloadDir == "" {
+	if dir == "" {
 		return true
 	}
-	mark := filepath.Join(r.DeferUntilReloadDir, url.PathEscape(id))
+	name := url.PathEscape(id)
+	if op != "" {
+		name = op + "-" + name
+	}
+	mark := filepath.Join(dir, name)
 	if b, err := os.ReadFile(mark); err == nil {
 		return strings.TrimSpace(string(b)) == processNonce
 	}
 	// Best-effort for the same reason forcedFailure's strike is: an unrecorded
 	// mark leaves the static behavior, which is loudly visible, where a
 	// swallowed failure-to-defer would not be.
-	if err := os.MkdirAll(r.DeferUntilReloadDir, 0700); err == nil {
+	if err := os.MkdirAll(dir, 0700); err == nil {
 		_ = os.WriteFile(mark, []byte(processNonce+"\n"), 0600)
 	}
 	return true

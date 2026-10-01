@@ -312,6 +312,54 @@ func TestAccSimpleDataSource(t *testing.T) {
 	})
 }
 
+// TestAccSimpleDataSourceDeferRefused proves defer_on_read reaches the read: a
+// stable Terraform allows no deferrals, so the listed data source fails to
+// read rather than being read as if nothing were marked.
+func TestAccSimpleDataSourceDeferRefused(t *testing.T) {
+	t.Cleanup(CleanupTestingDirectories(t))
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: ProviderFactories(""),
+		Steps: []resource.TestStep{
+			{
+				Config:      LoadFile(t, "testdata/simple_datasource/defer/main.tf"),
+				ExpectError: regexp.MustCompile("Invalid data source deferral"),
+			},
+		},
+	})
+}
+
+// TestAccSimpleDataSourceDefers is the deferral itself, on a build that allows
+// one: the read defers, and so does the resource that reads it, so nothing is
+// created.
+func TestAccSimpleDataSourceDefers(t *testing.T) {
+	t.Cleanup(CleanupTestingDirectories(t))
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: ProviderFactories(""),
+		TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+			tfversion.SkipIfNotAlpha(), // deferrals only supported in alpha
+		},
+		AdditionalCLIOptions: &resource.AdditionalCLIOptions{
+			Apply: resource.ApplyOptions{
+				AllowDeferral: true,
+			},
+			Plan: resource.PlanOptions{
+				AllowDeferral: true,
+			},
+		},
+		Steps: []resource.TestStep{
+			{
+				Config: LoadFile(t, "testdata/simple_datasource/defer/main.tf"),
+				Check: func(state *terraform.State) error {
+					if len(state.Modules[0].Resources) > 0 {
+						return errors.New("expected no resources to be created")
+					}
+					return nil
+				},
+			},
+		},
+	})
+}
+
 func TestAccSimpleResource(t *testing.T) {
 	t.Cleanup(CleanupTestingDirectories(t))
 	resource.Test(t, resource.TestCase{

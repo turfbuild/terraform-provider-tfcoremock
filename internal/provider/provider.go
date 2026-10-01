@@ -111,6 +111,7 @@ type tfcoremockProvider struct {
 	failOnInvoke []string
 	warnOnInvoke []string
 	deferAction  []string
+	deferRead    []string
 	failOnOpen   []string
 	deferChanges []string
 
@@ -161,6 +162,11 @@ type providerData struct {
 	// deferred: the action analog of defer_changes, for exercising what a
 	// client does with an invocation the provider cannot plan yet.
 	DeferOnAction types.List `tfsdk:"defer_on_action"`
+
+	// DeferOnRead lists data source ids whose read is deferred: the data
+	// analog of defer_changes, for exercising what a client does with a read
+	// the provider will not answer yet.
+	DeferOnRead types.List `tfsdk:"defer_on_read"`
 
 	DeferChanges types.List `tfsdk:"defer_changes"`
 
@@ -309,6 +315,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	failOnInvoke, failOnInvokeDiags := parseStringList(ctx, data.FailOnInvoke, "fail_on_invoke")
 	warnOnInvoke, warnOnInvokeDiags := parseStringList(ctx, data.WarnOnInvoke, "warn_on_invoke")
 	deferAction, deferActionDiags := parseStringList(ctx, data.DeferOnAction, "defer_on_action")
+	deferRead, deferReadDiags := parseStringList(ctx, data.DeferOnRead, "defer_on_read")
 	failOnOpen, failOnOpenDiags := parseStringList(ctx, data.FailOnOpen, "fail_on_open")
 	deferChanges, deferChangesDiags := parseStringList(ctx, data.DeferChanges, "defer_changes")
 
@@ -319,6 +326,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	response.Diagnostics.Append(failOnInvokeDiags...)
 	response.Diagnostics.Append(warnOnInvokeDiags...)
 	response.Diagnostics.Append(deferActionDiags...)
+	response.Diagnostics.Append(deferReadDiags...)
 	response.Diagnostics.Append(failOnOpenDiags...)
 	response.Diagnostics.Append(deferChangesDiags...)
 
@@ -329,6 +337,7 @@ func (m *tfcoremockProvider) Configure(ctx context.Context, request provider.Con
 	m.failOnInvoke = failOnInvoke
 	m.warnOnInvoke = warnOnInvoke
 	m.deferAction = deferAction
+	m.deferRead = deferRead
 	m.failOnOpen = failOnOpen
 	m.deferChanges = deferChanges
 	m.strictIdentity = data.StrictIdentity.ValueBool()
@@ -520,6 +529,9 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
+
+				DeferOnRead:         m.deferRead,
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
 			}
 		},
 		func() datasource.DataSource {
@@ -529,6 +541,9 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
+
+				DeferOnRead:         m.deferRead,
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
 			}
 		},
 	}
@@ -560,6 +575,9 @@ func (m *tfcoremockProvider) DataSources(ctx context.Context) []func() datasourc
 				Client:         m.client,
 				FailOnRead:     m.failOnRead,
 				FailOnceDir:    m.failOnceDirectory,
+
+				DeferOnRead:         m.deferRead,
+				DeferUntilReloadDir: m.deferUntilReloadDirectory,
 			}
 		})
 	}
@@ -775,6 +793,12 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 				Description:         "If set, any action whose config `string` attribute is in this list has its plan deferred, when the client allows deferrals, and fails to plan when it does not.",
 				MarkdownDescription: "If set, any action whose config `string` attribute is in this list has its plan deferred, when the client allows deferrals, and fails to plan when it does not.",
 			},
+			"defer_on_read": provider_schema.ListAttribute{
+				ElementType:         types.StringType,
+				Optional:            true,
+				Description:         "If set, any data source with an ID in this list has its read deferred with reason PROVIDER_CONFIG_UNKNOWN, the answer a terraform-plugin-sdk provider configured with unknown values gives a read, when the client allows deferrals, and fails to read when it does not. Honours defer_until_reload.",
+				MarkdownDescription: "If set, any data source with an ID in this list has its read deferred with reason `PROVIDER_CONFIG_UNKNOWN`, the answer a terraform-plugin-sdk provider configured with unknown values gives a read, when the client allows deferrals, and fails to read when it does not. Honours `defer_until_reload`.",
+			},
 			"fail_on_open": provider_schema.ListAttribute{
 				ElementType:         types.StringType,
 				Optional:            true,
@@ -789,8 +813,8 @@ func (m *tfcoremockProvider) Schema(ctx context.Context, request provider.Schema
 			},
 			"defer_until_reload": provider_schema.BoolAttribute{
 				Optional:            true,
-				Description:         "If set to true, a defer_changes id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope Configure rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
-				MarkdownDescription: "If set to true, a `defer_changes` id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope `Configure` rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
+				Description:         "If set to true, a defer_changes or defer_on_read id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope Configure rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
+				MarkdownDescription: "If set to true, a `defer_changes` or `defer_on_read` id stops deferring once the plugin PROCESS is restarted, rather than deferring forever. Models a provider whose view of the remote system is cached outside the scope `Configure` rebuilds — re-sending an identical configuration changes nothing, and only a fresh process looks again. Requires a persistent store. Defaults to `false`.",
 			},
 			"defer_on_unknown_config": provider_schema.BoolAttribute{
 				Optional:            true,
